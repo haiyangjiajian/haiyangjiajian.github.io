@@ -1,0 +1,932 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>海洋的博客</title>
+  <subtitle>A minus coder</subtitle>
+  <link href="/atom.xml" rel="self"/>
+  
+  <link href="http://decodezero.cn/"/>
+  <updated>2018-10-17T05:58:09.000Z</updated>
+  <id>http://decodezero.cn/</id>
+  
+  <author>
+    <name>海洋</name>
+    
+  </author>
+  
+  <generator uri="http://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>play登录状态管理</title>
+    <link href="http://decodezero.cn/2018/03/27/play-sessions.html"/>
+    <id>http://decodezero.cn/2018/03/27/play-sessions.html</id>
+    <published>2018-03-27T02:51:17.000Z</published>
+    <updated>2018-10-17T05:58:09.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="play登录状态管理"><a href="#play登录状态管理" class="headerlink" title="play登录状态管理"></a>play登录状态管理</h2><h2 id="目录"><a href="#目录" class="headerlink" title="目录"></a>目录</h2><ul>
+<li>加密过程</li>
+<li>模拟登录</li>
+</ul>
+<h4 id="加密过程"><a href="#加密过程" class="headerlink" title="加密过程"></a>加密过程</h4><p>在play官方<a href="https://www.playframework.com/documentation/2.6.x/ScalaSessionFlash" target="_blank" rel="external">文档</a>中有这样的介绍:</p>
+<p>It’s important to understand that Session and Flash data are not stored by the server but are added to each subsequent HTTP request, using the cookie mechanism. This means that the data size is very limited (up to 4 KB) and that you can only store string values. The default name for the cookie is PLAY_SESSION. This can be changed by configuring the key session.cookieName in application.conf.</p>
+<p>大意是说play通过cookie来保存session的信息，只能保存最大为4k的字符串。默认的cookie名字是PLAY_SESSION，可以在application.conf里面配置。</p>
+<p>来看一下这个配置是怎么使用，如何通过这个session来保存用户的登录信息。</p>
+<a id="more"></a>
+<p>在application.conf里有如下配置：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div></pre></td><td class="code"><pre><div class="line"># Sessions</div><div class="line">session.maxAge = 31536000000</div><div class="line">session.cookieName = my_play</div><div class="line">application.secret=&quot;xxx&quot;</div></pre></td></tr></table></figure>
+<p>application.secret是用来</p>
+<ul>
+<li>Signing session cookies and CSRF tokens</li>
+<li>Built in encryption utilities</li>
+</ul>
+<p>在play中一般登录成功后会通过如下方式返回</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">Ok(&quot;login success&quot;).withSession(&quot;userId&quot; -&gt; &quot;555&quot;).withCookies(...)</div></pre></td></tr></table></figure>
+<p>在withSession的调用中会把user_id通过application.secret来加密，并保存到cookie中，然后随结果返回。看一下具体执行的play源码</p>
+<ul>
+<li>play.api.mvc.Results.scala中的withSession方法</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div></pre></td><td class="code"><pre><div class="line"><span class="function">def <span class="title">withSession</span><span class="params">(session: (String, String)</span>*): Result </span>= withSession(Session(session.toMap))</div><div class="line"></div><div class="line"><span class="function">def <span class="title">withSession</span><span class="params">(session: Session)</span>: Result </span>= &#123;</div><div class="line">    <span class="keyword">if</span> (session.isEmpty) discardingCookies(Session.discard) <span class="keyword">else</span> withCookies(Session.encodeAsCookie(session))</div><div class="line">  &#125;</div></pre></td></tr></table></figure>
+<ul>
+<li>play.api.mvc.Http.scala中的encodeAsCookie方法将session转为cookie并签名</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div></pre></td><td class="code"><pre><div class="line">/**</div><div class="line">  * Encodes the data as a `Cookie`.</div><div class="line">*/</div><div class="line">def encodeAsCookie(data: T): Cookie = &#123;</div><div class="line">	val cookie = encode(serialize(data))</div><div class="line">  	Cookie(COOKIE_NAME, cookie, maxAge, path, domain, secure, httpOnly)</div><div class="line">&#125;</div><div class="line"></div><div class="line">/**</div><div class="line">	* Encodes the data as a `String`.</div><div class="line">*/</div><div class="line">def encode(data: Map[String, String]): String = &#123;</div><div class="line">	val encoded = data.map &#123;</div><div class="line">	case (k, v) =&gt; URLEncoder.encode(k, &quot;UTF-8&quot;) + &quot;=&quot; + URLEncoder.encode(v, &quot;UTF-8&quot;)&#125;.mkString(&quot;&amp;&quot;)</div><div class="line">	</div><div class="line">	//cookie的value是 加密后的串-userId</div><div class="line">	if (isSigned)</div><div class="line">		Crypto.sign(encoded) + &quot;-&quot; + encoded</div><div class="line">	else</div><div class="line">       encoded</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<ul>
+<li>play.api.libs.Crypto.scala使用application.secret对传入的参数进行签名</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div></pre></td><td class="code"><pre><div class="line">def sign(message: String): String = &#123;</div><div class="line">  sign(message, secret.getBytes(&quot;utf-8&quot;))</div><div class="line">&#125;</div><div class="line"></div><div class="line">//最终这个函数返回的就是签名后放在cookie中的userId</div><div class="line">def sign(message: String, key: Array[Byte]): String = &#123;</div><div class="line">  val mac = provider.map(p =&gt; Mac.getInstance(&quot;HmacSHA1&quot;, p)).getOrElse(Mac.getInstance(&quot;HmacSHA1&quot;))</div><div class="line">  mac.init(new SecretKeySpec(key, &quot;HmacSHA1&quot;))</div><div class="line">  Codecs.toHexString(mac.doFinal(message.getBytes(&quot;utf-8&quot;)))</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<h4 id="模拟登录"><a href="#模拟登录" class="headerlink" title="模拟登录"></a>模拟登录</h4><p>了解上面原理后可以手动生成cookie，然后模拟登录<br>比如上面例子中，最后服务器验证登录的cookie是my_play-userId = ‘xxx-555’。只要用上面签名的方法，对userId进行签名就可以生成任意用户的登录cookie。生成的cookies使用可以使用chrome插件 <a href="https://chrome.google.com/webstore/detail/editthiscookie/fngmhnnpilhplaeedifhccceomclgfbg?hl=zh-CN" target="_blank" rel="external">editThisCookie</a></p>
+<p>对于开发者来说一定要妥善保存application.secret,最好不要直接保存到application.conf中。可以考虑线上环境作为参数启动程序，或者用线上的配置覆盖application.conf.</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;h2 id=&quot;play登录状态管理&quot;&gt;&lt;a href=&quot;#play登录状态管理&quot; class=&quot;headerlink&quot; title=&quot;play登录状态管理&quot;&gt;&lt;/a&gt;play登录状态管理&lt;/h2&gt;&lt;h2 id=&quot;目录&quot;&gt;&lt;a href=&quot;#目录&quot; class=&quot;headerlink&quot; title=&quot;目录&quot;&gt;&lt;/a&gt;目录&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;加密过程&lt;/li&gt;
+&lt;li&gt;模拟登录&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h4 id=&quot;加密过程&quot;&gt;&lt;a href=&quot;#加密过程&quot; class=&quot;headerlink&quot; title=&quot;加密过程&quot;&gt;&lt;/a&gt;加密过程&lt;/h4&gt;&lt;p&gt;在play官方&lt;a href=&quot;https://www.playframework.com/documentation/2.6.x/ScalaSessionFlash&quot;&gt;文档&lt;/a&gt;中有这样的介绍:&lt;/p&gt;
+&lt;p&gt;It’s important to understand that Session and Flash data are not stored by the server but are added to each subsequent HTTP request, using the cookie mechanism. This means that the data size is very limited (up to 4 KB) and that you can only store string values. The default name for the cookie is PLAY_SESSION. This can be changed by configuring the key session.cookieName in application.conf.&lt;/p&gt;
+&lt;p&gt;大意是说play通过cookie来保存session的信息，只能保存最大为4k的字符串。默认的cookie名字是PLAY_SESSION，可以在application.conf里面配置。&lt;/p&gt;
+&lt;p&gt;来看一下这个配置是怎么使用，如何通过这个session来保存用户的登录信息。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="scala" scheme="http://decodezero.cn/tags/scala/"/>
+    
+      <category term="play" scheme="http://decodezero.cn/tags/play/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Android常用网络请求框架简析</title>
+    <link href="http://decodezero.cn/2017/10/24/android%E5%B8%B8%E7%94%A8%E7%BD%91%E7%BB%9C%E8%AF%B7%E6%B1%82%E6%A1%86%E6%9E%B6%E7%AE%80%E6%9E%90.html"/>
+    <id>http://decodezero.cn/2017/10/24/android常用网络请求框架简析.html</id>
+    <published>2017-10-24T07:03:47.000Z</published>
+    <updated>2018-10-17T05:57:55.000Z</updated>
+    
+    <content type="html"><![CDATA[<h1 id="Android常用网络请求框架简析"><a href="#Android常用网络请求框架简析" class="headerlink" title="Android常用网络请求框架简析"></a>Android常用网络请求框架简析</h1><h1 id="目录"><a href="#目录" class="headerlink" title="目录"></a>目录</h1><ul>
+<li>框架做什么</li>
+<li>常用请求方式</li>
+<li>Retrofit简析</li>
+</ul>
+<h1 id="框架做什么"><a href="#框架做什么" class="headerlink" title="框架做什么"></a>框架做什么</h1><p>网络请求框架是为了方便我们的业务开发而设计的。如果脱离开网络框架可以想象一下Android程序如何发出一个网络请求。需要设置合适的参数（keep-alive，content-type，timeout，get/post等），然后创建一个socket，发出http请求，等待接收响应，解析数据，进行处理。Android还需要一个线程切换，启动一个线程发出请求，handler把结果发送到主线程。上述只是一个网络请求最简单的情况，可能还要涉及复杂的网络请求，上传图片，需要处理缓存，结果异常处理等。</p>
+<p>这些都是和业务代码没有关系的网络连接的管理。网络请求框架就是帮我们封装这些细节的处理，使可以通过简单的配置就能进行网络请求。</p>
+<p>框架要做的事情</p>
+<ul>
+<li>异步请求</li>
+<li>线程池</li>
+<li>缓存</li>
+<li>数据解析</li>
+<li>错误处理</li>
+<li>等等</li>
+</ul>
+<a id="more"></a>
+<p>一个好的网络请求框架应该可以和业务代码的<strong>耦合性尽量降低</strong>。</p>
+<h1 id="常用请求方式"><a href="#常用请求方式" class="headerlink" title="常用请求方式"></a>常用请求方式</h1><h3 id="HttpClient"><a href="#HttpClient" class="headerlink" title="HttpClient"></a>HttpClient</h3><p>httpClient 在 Android 5.0 被废弃了，在 Android 6.0被删除。在官网中对其做了如下说明：“Android 6.0 release removes support for the Apache HTTP client. If your app is using this client and targets Android 2.3 (API level 9) or higher, use the HttpURLConnection class instead. This API is more efficient because it reduces network use through transparent compression and response caching, and minimizes power consumption.”</p>
+<h3 id="HttpURLConnection"><a href="#HttpURLConnection" class="headerlink" title="HttpURLConnection"></a>HttpURLConnection</h3><p>一个轻量级的 http 请求客户端，谷歌官方支持的，提供的 api 比较简单，比较容易使用和扩展。</p>
+<h3 id="okhttp"><a href="#okhttp" class="headerlink" title="okhttp"></a>okhttp</h3><p><a href="https://github.com/square/okhttp" target="_blank" rel="external">okhttp</a>是一个高性能的http请求框架。支持同步get，异步get，post请求，提交文件，提交分块请求，可以响应缓存，取消一个请求，连接、读取、写入超时，处理验证等。okhttp底层流处理是基于okio，它补充了 java.io 和 java.nio 的内容，使得数据访问、存储和处理更加便捷。</p>
+<h3 id="volley"><a href="#volley" class="headerlink" title="volley"></a>volley</h3><p>volley是谷歌官方支持的。Android 版本大于9使用HttpURLConnection，小于9使用 HttpClient 进行通信。不支持 post 大数据，所以不适合上传文件。不过 Volley 设计的初衷本身也就是为频繁的、数据量小的网络请求而生</p>
+<p>不过在现在17年10月份来看volley更新并不太活跃了</p>
+<p><img src="/assets/img/2017-10-24_volley.png" alt="include"></p>
+<p>可以通过源码来分析一下volley的是如何将网络请求发送出去的。在其中的一些细节，可以让我门对volley的一些性质有更深入的了解。</p>
+<p>volley需要调用Volley类中的静态方法newRequestQueue来生成一个requestQueue来管理执行的网络请求。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div></pre></td><td class="code"><pre><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">static</span> RequestQueue <span class="title">newRequestQueue</span><span class="params">(Context context, HttpStack stack)</span> </span>&#123;</div><div class="line">        File cacheDir = <span class="keyword">new</span> File(context.getCacheDir(), DEFAULT_CACHE_DIR);</div><div class="line"></div><div class="line">        String userAgent = <span class="string">"volley/0"</span>;</div><div class="line">        <span class="keyword">try</span> &#123;</div><div class="line">            String packageName = context.getPackageName();</div><div class="line">            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, <span class="number">0</span>);</div><div class="line">            userAgent = packageName + <span class="string">"/"</span> + info.versionCode;</div><div class="line">        &#125; <span class="keyword">catch</span> (NameNotFoundException e) &#123;</div><div class="line">        &#125;</div><div class="line"></div><div class="line">        <span class="keyword">if</span> (stack == <span class="keyword">null</span>) &#123;</div><div class="line">            <span class="keyword">if</span> (Build.VERSION.SDK_INT &gt;= <span class="number">9</span>) &#123;</div><div class="line">                stack = <span class="keyword">new</span> HurlStack();</div><div class="line">            &#125; <span class="keyword">else</span> &#123;</div><div class="line">                <span class="comment">// Prior to Gingerbread, HttpUrlConnection was unreliable.</span></div><div class="line">                <span class="comment">// See: http://android-developers.blogspot.com/2011/09/androids-http-clients.html</span></div><div class="line">                stack = <span class="keyword">new</span> HttpClientStack(AndroidHttpClient.newInstance(userAgent));</div><div class="line">            &#125;</div><div class="line">        &#125;</div><div class="line"></div><div class="line">        Network network = <span class="keyword">new</span> BasicNetwork(stack);</div><div class="line"></div><div class="line">        RequestQueue queue = <span class="keyword">new</span> RequestQueue(<span class="keyword">new</span> DiskBasedCache(cacheDir), network);</div><div class="line">        queue.start();</div><div class="line"></div><div class="line">        <span class="keyword">return</span> queue;</div><div class="line">    &#125;</div></pre></td></tr></table></figure>
+<p>可以看其中的 if (Build.VERSION.SDK_INT &gt;= 9)这句起，是Android 版本大于9使用HttpURLConnection，小于9使用 HttpClient 进行通信的具体实现。创建的requestQueue有一个Network的对象。执行到最后是queue.start()。看一下具体实现。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div></pre></td><td class="code"><pre><div class="line"><span class="comment">/**</span></div><div class="line">     * Starts the dispatchers in this queue.</div><div class="line">     */</div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">start</span><span class="params">()</span> </span>&#123;</div><div class="line">        stop();  <span class="comment">// Make sure any currently running dispatchers are stopped.</span></div><div class="line">        <span class="comment">// Create the cache dispatcher and start it.</span></div><div class="line">        mCacheDispatcher = <span class="keyword">new</span> CacheDispatcher(mCacheQueue, mNetworkQueue, mCache, mDelivery);</div><div class="line">        mCacheDispatcher.start();</div><div class="line"></div><div class="line">        <span class="comment">// Create network dispatchers (and corresponding threads) up to the pool size.</span></div><div class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i &lt; mDispatchers.length; i++) &#123;</div><div class="line">            NetworkDispatcher networkDispatcher = <span class="keyword">new</span> NetworkDispatcher(mNetworkQueue, mNetwork,</div><div class="line">                    mCache, mDelivery);</div><div class="line">            mDispatchers[i] = networkDispatcher;</div><div class="line">            networkDispatcher.start();</div><div class="line">        &#125;</div><div class="line">    &#125;</div></pre></td></tr></table></figure>
+<p>这段程序中启了一个 CacheDispatcher 线程用来处理缓存的请求，启动mDispatchers.length 个 NetworkDispatcher 用来处理实际发送的网络请求，默认是四个，NetworkDispatcher 有一个 Network对象是最后请求的实际发送者。这五个线程会一直在后台运行。<strong>实际网络请求的线程数量有多个，且可以配置</strong>是volley可以同时发送大量的请求的网络请求的原因之一。</p>
+<p>执行的五个线程准备好了之后，等待requestQueue.add方法加入需要执行的request</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div><div class="line">29</div><div class="line">30</div><div class="line">31</div><div class="line">32</div><div class="line">33</div><div class="line">34</div><div class="line">35</div><div class="line">36</div><div class="line">37</div><div class="line">38</div><div class="line">39</div><div class="line">40</div><div class="line">41</div><div class="line">42</div><div class="line">43</div><div class="line">44</div><div class="line">45</div></pre></td><td class="code"><pre><div class="line"><span class="comment">/**</span></div><div class="line">    * Adds a Request to the dispatch queue.</div><div class="line">    * <span class="doctag">@param</span> request The request to service</div><div class="line">    * <span class="doctag">@return</span> The passed-in request</div><div class="line">    */</div><div class="line">   <span class="keyword">public</span> &lt;T&gt; <span class="function">Request&lt;T&gt; <span class="title">add</span><span class="params">(Request&lt;T&gt; request)</span> </span>&#123;</div><div class="line">       <span class="comment">// Tag the request as belonging to this queue and add it to the set of current requests.</span></div><div class="line">       request.setRequestQueue(<span class="keyword">this</span>);</div><div class="line">       <span class="keyword">synchronized</span> (mCurrentRequests) &#123;</div><div class="line">           mCurrentRequests.add(request);</div><div class="line">       &#125;</div><div class="line"></div><div class="line">       <span class="comment">// Process requests in the order they are added.</span></div><div class="line">       request.setSequence(getSequenceNumber());</div><div class="line">       request.addMarker(<span class="string">"add-to-queue"</span>);</div><div class="line"></div><div class="line">       <span class="comment">// If the request is uncacheable, skip the cache queue and go straight to the network.</span></div><div class="line">       <span class="keyword">if</span> (!request.shouldCache()) &#123;</div><div class="line">           mNetworkQueue.add(request);</div><div class="line">           <span class="keyword">return</span> request;</div><div class="line">       &#125;</div><div class="line"></div><div class="line">       <span class="comment">// Insert request into stage if there's already a request with the same cache key in flight.</span></div><div class="line">       <span class="keyword">synchronized</span> (mWaitingRequests) &#123;</div><div class="line">           String cacheKey = request.getCacheKey();</div><div class="line">           <span class="keyword">if</span> (mWaitingRequests.containsKey(cacheKey)) &#123;</div><div class="line">               <span class="comment">// There is already a request in flight. Queue up.</span></div><div class="line">               Queue&lt;Request&lt;?&gt;&gt; stagedRequests = mWaitingRequests.get(cacheKey);</div><div class="line">               <span class="keyword">if</span> (stagedRequests == <span class="keyword">null</span>) &#123;</div><div class="line">                   stagedRequests = <span class="keyword">new</span> LinkedList&lt;Request&lt;?&gt;&gt;();</div><div class="line">               &#125;</div><div class="line">               stagedRequests.add(request);</div><div class="line">               mWaitingRequests.put(cacheKey, stagedRequests);</div><div class="line">               <span class="keyword">if</span> (VolleyLog.DEBUG) &#123;</div><div class="line">                   VolleyLog.v(<span class="string">"Request for cacheKey=%s is in flight, putting on hold."</span>, cacheKey);</div><div class="line">               &#125;</div><div class="line">           &#125; <span class="keyword">else</span> &#123;</div><div class="line">               <span class="comment">// Insert 'null' queue for this cacheKey, indicating there is now a request in</span></div><div class="line">               <span class="comment">// flight.</span></div><div class="line">               mWaitingRequests.put(cacheKey, <span class="keyword">null</span>);</div><div class="line">               mCacheQueue.add(request);</div><div class="line">           &#125;</div><div class="line">           <span class="keyword">return</span> request;</div><div class="line">       &#125;</div><div class="line">   &#125;</div></pre></td></tr></table></figure>
+<p>这段代码会判断当前请求配置的是否可以缓存，如果不可以缓存则直接加入到 mNetworkQueue 中，如果可以缓存则将请求加入到 mCacheQueue 。CacheDispatcher 会监听mCacheQueue。NetworkDispatcher会监听 mNetworkQueue。</p>
+<p>在 CacheDispatcher 中会查找放入 mCacheQueue 的请求是否有缓存。如果缓存命中，返回结果，如果未命中放入 mNetworkQueue 中，看一下 NetworkDispatcher 的 run 方法</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div><div class="line">29</div><div class="line">30</div><div class="line">31</div><div class="line">32</div><div class="line">33</div><div class="line">34</div><div class="line">35</div><div class="line">36</div><div class="line">37</div><div class="line">38</div><div class="line">39</div><div class="line">40</div><div class="line">41</div><div class="line">42</div><div class="line">43</div><div class="line">44</div><div class="line">45</div><div class="line">46</div><div class="line">47</div><div class="line">48</div><div class="line">49</div><div class="line">50</div><div class="line">51</div><div class="line">52</div><div class="line">53</div><div class="line">54</div><div class="line">55</div><div class="line">56</div><div class="line">57</div><div class="line">58</div><div class="line">59</div><div class="line">60</div><div class="line">61</div><div class="line">62</div><div class="line">63</div><div class="line">64</div></pre></td><td class="code"><pre><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</div><div class="line">        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);</div><div class="line">        <span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</div><div class="line">            <span class="keyword">long</span> startTimeMs = SystemClock.elapsedRealtime();</div><div class="line">            Request&lt;?&gt; request;</div><div class="line">            <span class="keyword">try</span> &#123;</div><div class="line">                <span class="comment">// Take a request from the queue.</span></div><div class="line">                request = mQueue.take();</div><div class="line">            &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</div><div class="line">                <span class="comment">// We may have been interrupted because it was time to quit.</span></div><div class="line">                <span class="keyword">if</span> (mQuit) &#123;</div><div class="line">                    <span class="keyword">return</span>;</div><div class="line">                &#125;</div><div class="line">                <span class="keyword">continue</span>;</div><div class="line">            &#125;</div><div class="line"></div><div class="line">            <span class="keyword">try</span> &#123;</div><div class="line">                request.addMarker(<span class="string">"network-queue-take"</span>);</div><div class="line"></div><div class="line">                <span class="comment">// If the request was cancelled already, do not perform the</span></div><div class="line">                <span class="comment">// network request.</span></div><div class="line">                <span class="keyword">if</span> (request.isCanceled()) &#123;</div><div class="line">                    request.finish(<span class="string">"network-discard-cancelled"</span>);</div><div class="line">                    <span class="keyword">continue</span>;</div><div class="line">                &#125;</div><div class="line"></div><div class="line">                addTrafficStatsTag(request);</div><div class="line"></div><div class="line">                <span class="comment">// Perform the network request.</span></div><div class="line">                NetworkResponse networkResponse = mNetwork.performRequest(request);</div><div class="line">                request.addMarker(<span class="string">"network-http-complete"</span>);</div><div class="line"></div><div class="line">                <span class="comment">// If the server returned 304 AND we delivered a response already,</span></div><div class="line">                <span class="comment">// we're done -- don't deliver a second identical response.</span></div><div class="line">                <span class="keyword">if</span> (networkResponse.notModified &amp;&amp; request.hasHadResponseDelivered()) &#123;</div><div class="line">                    request.finish(<span class="string">"not-modified"</span>);</div><div class="line">                    <span class="keyword">continue</span>;</div><div class="line">                &#125;</div><div class="line"></div><div class="line">                <span class="comment">// Parse the response here on the worker thread.</span></div><div class="line">                Response&lt;?&gt; response = request.parseNetworkResponse(networkResponse);</div><div class="line">                request.addMarker(<span class="string">"network-parse-complete"</span>);</div><div class="line"></div><div class="line">                <span class="comment">// Write to cache if applicable.</span></div><div class="line">                <span class="comment">// <span class="doctag">TODO:</span> Only update cache metadata instead of entire record for 304s.</span></div><div class="line">                <span class="keyword">if</span> (request.shouldCache() &amp;&amp; response.cacheEntry != <span class="keyword">null</span>) &#123;</div><div class="line">                    mCache.put(request.getCacheKey(), response.cacheEntry);</div><div class="line">                    request.addMarker(<span class="string">"network-cache-written"</span>);</div><div class="line">                &#125;</div><div class="line"></div><div class="line">                <span class="comment">// Post the response back.</span></div><div class="line">                request.markDelivered();</div><div class="line">                mDelivery.postResponse(request, response);</div><div class="line">            &#125; <span class="keyword">catch</span> (VolleyError volleyError) &#123;</div><div class="line">                volleyError.setNetworkTimeMs(SystemClock.elapsedRealtime() - startTimeMs);</div><div class="line">                parseAndDeliverNetworkError(request, volleyError);</div><div class="line">            &#125; <span class="keyword">catch</span> (Exception e) &#123;</div><div class="line">                VolleyLog.e(e, <span class="string">"Unhandled exception %s"</span>, e.toString());</div><div class="line">                VolleyError volleyError = <span class="keyword">new</span> VolleyError(e);</div><div class="line">                volleyError.setNetworkTimeMs(SystemClock.elapsedRealtime() - startTimeMs);</div><div class="line">                mDelivery.postError(request, volleyError);</div><div class="line">            &#125;</div><div class="line">        &#125;</div><div class="line">    &#125;</div></pre></td></tr></table></figure>
+<p>可以关注这句话 NetworkResponse networkResponse = mNetwork.performRequest(request); 这句执行了具体的网络请求。读一下它的代码，看看其对网络请求的发送如何处理。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div><div class="line">29</div><div class="line">30</div><div class="line">31</div><div class="line">32</div><div class="line">33</div><div class="line">34</div><div class="line">35</div><div class="line">36</div><div class="line">37</div><div class="line">38</div><div class="line">39</div><div class="line">40</div><div class="line">41</div><div class="line">42</div><div class="line">43</div><div class="line">44</div><div class="line">45</div><div class="line">46</div><div class="line">47</div><div class="line">48</div><div class="line">49</div><div class="line">50</div><div class="line">51</div><div class="line">52</div><div class="line">53</div><div class="line">54</div><div class="line">55</div><div class="line">56</div><div class="line">57</div><div class="line">58</div><div class="line">59</div><div class="line">60</div><div class="line">61</div><div class="line">62</div><div class="line">63</div><div class="line">64</div><div class="line">65</div><div class="line">66</div><div class="line">67</div><div class="line">68</div><div class="line">69</div><div class="line">70</div><div class="line">71</div><div class="line">72</div><div class="line">73</div><div class="line">74</div><div class="line">75</div><div class="line">76</div><div class="line">77</div><div class="line">78</div><div class="line">79</div><div class="line">80</div><div class="line">81</div><div class="line">82</div><div class="line">83</div><div class="line">84</div><div class="line">85</div></pre></td><td class="code"><pre><div class="line"><span class="function"><span class="keyword">public</span> NetworkResponse <span class="title">performRequest</span><span class="params">(Request&lt;?&gt; request)</span> <span class="keyword">throws</span> VolleyError </span>&#123;</div><div class="line">        <span class="keyword">long</span> requestStart = SystemClock.elapsedRealtime();</div><div class="line">        <span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</div><div class="line">            HttpResponse httpResponse = <span class="keyword">null</span>;</div><div class="line">            <span class="keyword">byte</span>[] responseContents = <span class="keyword">null</span>;</div><div class="line">            Map&lt;String, String&gt; responseHeaders = Collections.emptyMap();</div><div class="line">            <span class="keyword">try</span> &#123;</div><div class="line">                <span class="comment">// Gather headers.</span></div><div class="line">                Map&lt;String, String&gt; headers = <span class="keyword">new</span> HashMap&lt;String, String&gt;();</div><div class="line">                addCacheHeaders(headers, request.getCacheEntry());</div><div class="line">                httpResponse = mHttpStack.performRequest(request, headers);</div><div class="line">                StatusLine statusLine = httpResponse.getStatusLine();</div><div class="line">                <span class="keyword">int</span> statusCode = statusLine.getStatusCode();</div><div class="line"></div><div class="line">                responseHeaders = convertHeaders(httpResponse.getAllHeaders());</div><div class="line">                <span class="comment">// Handle cache validation.</span></div><div class="line">                <span class="keyword">if</span> (statusCode == HttpStatus.SC_NOT_MODIFIED) &#123;</div><div class="line"></div><div class="line">                    Entry entry = request.getCacheEntry();</div><div class="line">                    <span class="keyword">if</span> (entry == <span class="keyword">null</span>) &#123;</div><div class="line">                        <span class="keyword">return</span> <span class="keyword">new</span> NetworkResponse(HttpStatus.SC_NOT_MODIFIED, <span class="keyword">null</span>,</div><div class="line">                                responseHeaders, <span class="keyword">true</span>,</div><div class="line">                                SystemClock.elapsedRealtime() - requestStart);</div><div class="line">                    &#125;</div><div class="line"></div><div class="line">                    <span class="comment">// A HTTP 304 response does not have all header fields. We</span></div><div class="line">                    <span class="comment">// have to use the header fields from the cache entry plus</span></div><div class="line">                    <span class="comment">// the new ones from the response.</span></div><div class="line">                    <span class="comment">// http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.3.5</span></div><div class="line">                    entry.responseHeaders.putAll(responseHeaders);</div><div class="line">                    <span class="keyword">return</span> <span class="keyword">new</span> NetworkResponse(HttpStatus.SC_NOT_MODIFIED, entry.data,</div><div class="line">                            entry.responseHeaders, <span class="keyword">true</span>,</div><div class="line">                            SystemClock.elapsedRealtime() - requestStart);</div><div class="line">                &#125;</div><div class="line"></div><div class="line">                <span class="comment">// Some responses such as 204s do not have content.  We must check.</span></div><div class="line">                <span class="keyword">if</span> (httpResponse.getEntity() != <span class="keyword">null</span>) &#123;</div><div class="line">                  responseContents = entityToBytes(httpResponse.getEntity());</div><div class="line">                &#125; <span class="keyword">else</span> &#123;</div><div class="line">                  <span class="comment">// Add 0 byte response as a way of honestly representing a</span></div><div class="line">                  <span class="comment">// no-content request.</span></div><div class="line">                  responseContents = <span class="keyword">new</span> <span class="keyword">byte</span>[<span class="number">0</span>];</div><div class="line">                &#125;</div><div class="line"></div><div class="line">                <span class="comment">// if the request is slow, log it.</span></div><div class="line">                <span class="keyword">long</span> requestLifetime = SystemClock.elapsedRealtime() - requestStart;</div><div class="line">                logSlowRequests(requestLifetime, request, responseContents, statusLine);</div><div class="line"></div><div class="line">                <span class="keyword">if</span> (statusCode &lt; <span class="number">200</span> || statusCode &gt; <span class="number">299</span>) &#123;</div><div class="line">                    <span class="keyword">throw</span> <span class="keyword">new</span> IOException();</div><div class="line">                &#125;</div><div class="line">                <span class="keyword">return</span> <span class="keyword">new</span> NetworkResponse(statusCode, responseContents, responseHeaders, <span class="keyword">false</span>,</div><div class="line">                        SystemClock.elapsedRealtime() - requestStart);</div><div class="line">            &#125; <span class="keyword">catch</span> (SocketTimeoutException e) &#123;</div><div class="line">                attemptRetryOnException(<span class="string">"socket"</span>, request, <span class="keyword">new</span> TimeoutError());</div><div class="line">            &#125; <span class="keyword">catch</span> (ConnectTimeoutException e) &#123;</div><div class="line">                attemptRetryOnException(<span class="string">"connection"</span>, request, <span class="keyword">new</span> TimeoutError());</div><div class="line">            &#125; <span class="keyword">catch</span> (MalformedURLException e) &#123;</div><div class="line">                <span class="keyword">throw</span> <span class="keyword">new</span> RuntimeException(<span class="string">"Bad URL "</span> + request.getUrl(), e);</div><div class="line">            &#125; <span class="keyword">catch</span> (IOException e) &#123;</div><div class="line">                <span class="keyword">int</span> statusCode = <span class="number">0</span>;</div><div class="line">                NetworkResponse networkResponse = <span class="keyword">null</span>;</div><div class="line">                <span class="keyword">if</span> (httpResponse != <span class="keyword">null</span>) &#123;</div><div class="line">                    statusCode = httpResponse.getStatusLine().getStatusCode();</div><div class="line">                &#125; <span class="keyword">else</span> &#123;</div><div class="line">                    <span class="keyword">throw</span> <span class="keyword">new</span> NoConnectionError(e);</div><div class="line">                &#125;</div><div class="line">                VolleyLog.e(<span class="string">"Unexpected response code %d for %s"</span>, statusCode, request.getUrl());</div><div class="line">                <span class="keyword">if</span> (responseContents != <span class="keyword">null</span>) &#123;</div><div class="line">                    networkResponse = <span class="keyword">new</span> NetworkResponse(statusCode, responseContents,</div><div class="line">                            responseHeaders, <span class="keyword">false</span>, SystemClock.elapsedRealtime() - requestStart);</div><div class="line">                    <span class="keyword">if</span> (statusCode == HttpStatus.SC_UNAUTHORIZED ||</div><div class="line">                            statusCode == HttpStatus.SC_FORBIDDEN) &#123;</div><div class="line">                        attemptRetryOnException(<span class="string">"auth"</span>,</div><div class="line">                                request, <span class="keyword">new</span> AuthFailureError(networkResponse));</div><div class="line">                    &#125; <span class="keyword">else</span> &#123;</div><div class="line">                        <span class="comment">// <span class="doctag">TODO:</span> Only throw ServerError for 5xx status codes.</span></div><div class="line">                        <span class="keyword">throw</span> <span class="keyword">new</span> ServerError(networkResponse);</div><div class="line">                    &#125;</div><div class="line">                &#125; <span class="keyword">else</span> &#123;</div><div class="line">                    <span class="keyword">throw</span> <span class="keyword">new</span> NetworkError(networkResponse);</div><div class="line">                &#125;</div><div class="line">            &#125;</div><div class="line">        &#125;</div><div class="line">    &#125;</div></pre></td></tr></table></figure>
+<p>这些代码里面重点看 httpResponse = mHttpStack.performRequest(request, headers); 这句是调用 mHttpStack 即最开始封装的HttpURLConnection或者HttpClient发送具体请求，往下部分是对httpResponse结果的处理。关于结果处理重点看 responseContents = entityToBytes(httpResponse.getEntity()); 这句通过entityToBytes方法将原entity转换成了byte[]。看一下具体的实现</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div><div class="line">29</div></pre></td><td class="code"><pre><div class="line"><span class="comment">/** Reads the contents of HttpEntity into a byte[]. */</span></div><div class="line">    <span class="keyword">private</span> <span class="keyword">byte</span>[] entityToBytes(HttpEntity entity) <span class="keyword">throws</span> IOException, ServerError &#123;</div><div class="line">        PoolingByteArrayOutputStream bytes =</div><div class="line">                <span class="keyword">new</span> PoolingByteArrayOutputStream(mPool, (<span class="keyword">int</span>) entity.getContentLength());</div><div class="line">        <span class="keyword">byte</span>[] buffer = <span class="keyword">null</span>;</div><div class="line">        <span class="keyword">try</span> &#123;</div><div class="line">            InputStream in = entity.getContent();</div><div class="line">            <span class="keyword">if</span> (in == <span class="keyword">null</span>) &#123;</div><div class="line">                <span class="keyword">throw</span> <span class="keyword">new</span> ServerError();</div><div class="line">            &#125;</div><div class="line">            buffer = mPool.getBuf(<span class="number">1024</span>);</div><div class="line">            <span class="keyword">int</span> count;</div><div class="line">            <span class="keyword">while</span> ((count = in.read(buffer)) != -<span class="number">1</span>) &#123;</div><div class="line">                bytes.write(buffer, <span class="number">0</span>, count);</div><div class="line">            &#125;</div><div class="line">            <span class="keyword">return</span> bytes.toByteArray();</div><div class="line">        &#125; <span class="keyword">finally</span> &#123;</div><div class="line">            <span class="keyword">try</span> &#123;</div><div class="line">                <span class="comment">// Close the InputStream and release the resources by "consuming the content".</span></div><div class="line">                entity.consumeContent();</div><div class="line">            &#125; <span class="keyword">catch</span> (IOException e) &#123;</div><div class="line">                <span class="comment">// This can happen if there was an exception above that left the entity in</span></div><div class="line">                <span class="comment">// an invalid state.</span></div><div class="line">                VolleyLog.v(<span class="string">"Error occured when calling consumingContent"</span>);</div><div class="line">            &#125;</div><div class="line">            mPool.returnBuf(buffer);</div><div class="line">            bytes.close();</div><div class="line">        &#125;</div><div class="line">    &#125;</div></pre></td></tr></table></figure>
+<p>可以重点看这句实现buffer = mPool.getBuf(1024); 这一句从 mPool 中取得一个 buffer ，然后将 entity 的内容写入这个 buffer 中。这个 mPool 是类 ByteArrayPool 的一个对象。ByteArrayPool 是一个字节数组缓存池。是用来缓存网络请求获得的数据。这个缓存池设置的目的就是方便缓存频繁的网络请求返回的结果，不然需要频繁的申请内存，释放内存，gc。频繁GC对客户端的性能有直接影响。ByteArrayPool 利用 mBuffersByLastUse 和 mBuffersBySize 完成字节数组的缓存，提供 getBuf 和 returnBuf的方法。当需要使内存区域的时候，先从已经分配的区域中获得以减少内存分配次数。当空间用完以后，再将数据返回给此缓冲区。<br> <strong>通过ByteArrayPool的使用，可以看到Volley所有的网络请求结果均是在缓存在内存中，可以很方便的频繁发送小的请求，但是对于一些大数据量的请求，会将这个缓存占满，所以volley不支持post大数据</strong></p>
+<p>总结一下，volley有三类线程，MainThread、CacheDispatcher线程、NetworkDispatcher线程。volley 使用 RequestQueue 管理执行网络操作的工作线程。在主线程中调用 RequestQueue 的 add()方法来添加一条网络请求，这条请求会先被加入到缓存队列当中，如果发现可以找到相应的缓存结果就直接读取缓存并解析，然后回调给主线程。如果在缓存中没有找到结果，则将这条请求加入到网络请求队列中，然后处理发送HTTP请求，解析响应结果，写入缓存，并回调主线程。HTTP请求响应的结果会转换成byte[],使用ByteArrayPool这个对象来管理到缓存中，减少内存分配，释放次数。</p>
+<h3 id="Retrofit"><a href="#Retrofit" class="headerlink" title="Retrofit"></a>Retrofit</h3><p><a href="https://github.com/square/retrofit" target="_blank" rel="external">Retrofit</a>和okhttp一样是Square的开源项目。相比较volley，retrofit解耦的更加彻底。</p>
+<ul>
+<li><p>使用注解来描述http请求</p>
+<ul>
+<li>请求方法注解</li>
+<li>请求头注解</li>
+<li>请求和响应格式注解</li>
+<li><p>请求参数注解</p>
+<p>以下是部分在接口HttpService中的代码，声明了一些接口</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div></pre></td><td class="code"><pre><div class="line"><span class="comment">//用户问题反馈接口</span></div><div class="line">   <span class="meta">@FormUrlEncoded</span></div><div class="line">   <span class="meta">@POST</span>(<span class="string">"/api/1.0/feedBack"</span>)</div><div class="line">   Observable&lt;BaseHttpResult&lt;JsonObject&gt;&gt; feedBack(<span class="meta">@FieldMap</span> Map&lt;String, String&gt; map);</div><div class="line">   </div><div class="line">   <span class="comment">//上传图片接口</span></div><div class="line">   <span class="meta">@Multipart</span></div><div class="line">   <span class="meta">@POST</span>(<span class="string">"/api/1.0/upload"</span>)</div><div class="line">   Observable&lt;BaseHttpResult&lt;ImageUploadBean&gt;&gt; uploadImage(<span class="meta">@PartMap</span> Map&lt;String, MultipartBody.Part&gt; map);</div><div class="line">   </div><div class="line">   <span class="comment">//获取消息列表</span></div><div class="line">   <span class="meta">@GET</span>(<span class="string">"/api/1.0/messages"</span>)</div><div class="line">   Observable&lt;BaseHttpResult&lt;List&lt;MessageBean&gt;&gt;&gt; getMessageList(<span class="meta">@Query</span>(<span class="string">"userID"</span>) String userId);</div></pre></td></tr></table></figure>
+</li>
+</ul>
+</li>
+<li><p>可以配置不同的请求适配器，比如RxJava，Java8，Guava；可以配置不同的反序列化工具，比如json，protobuff，xml等；也可以配置不同的http请求客户端，默认使用okhttp。</p>
+</li>
+</ul>
+<pre><code><figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div></pre></td><td class="code"><pre><div class="line"><span class="comment">// http请求客户端</span></div><div class="line">client = <span class="keyword">new</span> OkHttpClient</div><div class="line">	.Builder()</div><div class="line">	.addInterceptor(addQueryParameterInterceptor())  <span class="comment">//参数添加</span></div><div class="line">	.addInterceptor(addHeaderInterceptor()) <span class="comment">// token过滤</span></div><div class="line">	.addInterceptor(httpLoggingInterceptor) <span class="comment">//日志,所有的请求响应度看到</span></div><div class="line">	.cache(cache)  <span class="comment">//添加缓存</span></div><div class="line">	.connectTimeout(<span class="number">60l</span>, TimeUnit.SECONDS)</div><div class="line">	.readTimeout(<span class="number">60l</span>, TimeUnit.SECONDS)</div><div class="line">	.writeTimeout(<span class="number">60l</span>, TimeUnit.SECONDS)</div><div class="line">	.build();</div><div class="line"><span class="comment">// 获取retrofit的实例</span></div><div class="line">retrofit = <span class="keyword">new</span> Retrofit</div><div class="line">	.Builder()</div><div class="line">	.baseUrl(baseUrl) <span class="comment">//配置baseurl</span></div><div class="line">	.client(client) <span class="comment">//配置http请求客户端</span></div><div class="line">	.addCallAdapterFactory(RxJavaCallAdapterFactory.create()) <span class="comment">//配置请求适配器，这里用Rxjava</span></div><div class="line">	.addConverterFactory(GsonConverterFactory.create()) <span class="comment">//配置反序列化工具，这里用Gson</span></div><div class="line">	.build();</div></pre></td></tr></table></figure>
+</code></pre><p>在上面的示例代码中可以看到retrofit的网络请求部分依赖于okhttp，okhttp完成缓存，超时时间，日志拦截器配置等；请求的适配器，反序列化工具也是配置的其他开源工具。retrofit只负责一个架构组织的工作，将网络请求中用到的各个模块灵活的拼装起来，可以方便的更换各个组件。贯彻了单一职责的原则。</p>
+<ul>
+<li>设计模式的使用</li>
+</ul>
+<p>retrofit如此灵活的配置，主要得益于它的架构设计中使用了大量的设计模式。</p>
+<p><img src="/assets/img/2017-10-24_adapt.png" alt="include"></p>
+<p>retrofit的源码可以说是设计模式的教科书，上面这张图中只列出了在retrofit中应用的部分设计模式，一些基本的如工厂模式，单例模式等，并未列出。</p>
+<p>在retrofit中请求的适配器，反序列化工具的配置部分都用到了适配器模式。</p>
+<p>其实适配器模式并不复杂,合理的使用会对代码的灵活性带来很大的收益。下图是适配器模式的类图。</p>
+<p><img src="/assets/img/2017-10-24_adapter_mode.png" alt="include"></p>
+<p>我们来分析一下retrofit如何通过适配器模式来方便的切换不同的请求适配器。</p>
+<p>retrofit的发送网络请求一般只需要两行代码</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div></pre></td><td class="code"><pre><div class="line">HttpService httpService = retrofit.create(GitHubService.class);<span class="comment">//获得HttpService的一个实现类</span></div><div class="line">Observable&lt;BaseHttpResult&lt;List&lt;MessageBean&gt;&gt;&gt; messagetList = httpService.getMessageList(<span class="string">"123"</span>) <span class="comment">//调用上文的getMessageList方法</span></div></pre></td></tr></table></figure>
+<p>我们跟进retrofit的create方法</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">public</span> &lt;T&gt; <span class="function">T <span class="title">create</span><span class="params">(<span class="keyword">final</span> Class&lt;T&gt; service)</span> </span>&#123;</div><div class="line">   Utils.validateServiceInterface(service);</div><div class="line">   <span class="keyword">if</span> (validateEagerly) &#123;</div><div class="line">     eagerlyValidateMethods(service);</div><div class="line">   &#125;</div><div class="line">   <span class="keyword">return</span> (T) Proxy.newProxyInstance(service.getClassLoader(), <span class="keyword">new</span> Class&lt;?&gt;[] &#123; service &#125;,</div><div class="line">       <span class="keyword">new</span> InvocationHandler() &#123;</div><div class="line">         <span class="keyword">private</span> <span class="keyword">final</span> Platform platform = Platform.get();</div><div class="line"></div><div class="line">         <span class="meta">@Override</span> <span class="function"><span class="keyword">public</span> Object <span class="title">invoke</span><span class="params">(Object proxy, Method method, Object... args)</span></span></div><div class="line">             <span class="keyword">throws</span> Throwable &#123;</div><div class="line">           <span class="comment">// If the method is a method from Object then defer to normal invocation.</span></div><div class="line">           <span class="keyword">if</span> (method.getDeclaringClass() == Object.class) &#123;</div><div class="line">             <span class="keyword">return</span> method.invoke(<span class="keyword">this</span>, args);</div><div class="line">           &#125;</div><div class="line">           <span class="keyword">if</span> (platform.isDefaultMethod(method)) &#123;</div><div class="line">             <span class="keyword">return</span> platform.invokeDefaultMethod(method, service, proxy, args);</div><div class="line">           &#125;</div><div class="line">           ServiceMethod serviceMethod = loadServiceMethod(method);</div><div class="line">           OkHttpCall okHttpCall = <span class="keyword">new</span> OkHttpCall&lt;&gt;(serviceMethod, args);</div><div class="line">           <span class="keyword">return</span> serviceMethod.callAdapter.adapt(okHttpCall);</div><div class="line">         &#125;</div><div class="line">       &#125;);</div><div class="line"> &#125;</div></pre></td></tr></table></figure>
+<p>在这个实现里，创建api HttpService 的实现实例使用到了<a href="http://a.codekk.com/detail/Android/Caij/%E5%85%AC%E5%85%B1%E6%8A%80%E6%9C%AF%E7%82%B9%E4%B9%8B%20Java%20%E5%8A%A8%E6%80%81%E4%BB%A3%E7%90%86" target="_blank" rel="external">动态代理</a>。</p>
+<p>我们重点分析最后面的三行代码。</p>
+<p>第一行 ServiceMethod serviceMethod = loadServiceMethod(method); ServiceMethod 这个类的第一行注释很好的诠释了这个类的作用, 将一个 api 方法转换成为一个 http 请求。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div><div class="line">29</div><div class="line">30</div><div class="line">31</div><div class="line">32</div><div class="line">33</div><div class="line">34</div><div class="line">35</div><div class="line">36</div><div class="line">37</div></pre></td><td class="code"><pre><div class="line"><span class="comment">/** Adapts an invocation of an interface method into an HTTP call. */</span></div><div class="line"></div><div class="line"><span class="keyword">final</span> <span class="class"><span class="keyword">class</span> <span class="title">ServiceMethod</span>&lt;<span class="title">T</span>&gt; </span>&#123;</div><div class="line">  <span class="comment">// Upper and lower characters, digits, underscores, and hyphens, starting with a character.</span></div><div class="line">  <span class="keyword">static</span> <span class="keyword">final</span> String PARAM = <span class="string">"[a-zA-Z][a-zA-Z0-9_-]*"</span>;</div><div class="line">  <span class="keyword">static</span> <span class="keyword">final</span> Pattern PARAM_URL_REGEX = Pattern.compile(<span class="string">"\\&#123;("</span> + PARAM + <span class="string">")\\&#125;"</span>);</div><div class="line">  <span class="keyword">static</span> <span class="keyword">final</span> Pattern PARAM_NAME_REGEX = Pattern.compile(PARAM);</div><div class="line"></div><div class="line">  <span class="keyword">final</span> okhttp3.Call.Factory callFactory;</div><div class="line">  <span class="keyword">final</span> CallAdapter&lt;?&gt; callAdapter;</div><div class="line"></div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> HttpUrl baseUrl;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> Converter&lt;ResponseBody, T&gt; responseConverter;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> String httpMethod;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> String relativeUrl;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> Headers headers;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> MediaType contentType;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> <span class="keyword">boolean</span> hasBody;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> <span class="keyword">boolean</span> isFormEncoded;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> <span class="keyword">boolean</span> isMultipart;</div><div class="line">  <span class="keyword">private</span> <span class="keyword">final</span> ParameterHandler&lt;?&gt;[] parameterHandlers;</div><div class="line"></div><div class="line">  ServiceMethod(Builder&lt;T&gt; builder) &#123;</div><div class="line">    <span class="keyword">this</span>.callFactory = builder.retrofit.callFactory();</div><div class="line">    <span class="keyword">this</span>.callAdapter = builder.callAdapter;</div><div class="line">    <span class="keyword">this</span>.baseUrl = builder.retrofit.baseUrl();</div><div class="line">    <span class="keyword">this</span>.responseConverter = builder.responseConverter;</div><div class="line">    <span class="keyword">this</span>.httpMethod = builder.httpMethod;</div><div class="line">    <span class="keyword">this</span>.relativeUrl = builder.relativeUrl;</div><div class="line">    <span class="keyword">this</span>.headers = builder.headers;</div><div class="line">    <span class="keyword">this</span>.contentType = builder.contentType;</div><div class="line">    <span class="keyword">this</span>.hasBody = builder.hasBody;</div><div class="line">    <span class="keyword">this</span>.isFormEncoded = builder.isFormEncoded;</div><div class="line">    <span class="keyword">this</span>.isMultipart = builder.isMultipart;</div><div class="line">    <span class="keyword">this</span>.parameterHandlers = builder.parameterHandlers;</div><div class="line">  &#125;</div><div class="line">  ...</div></pre></td></tr></table></figure>
+<p>在这里我们主要分析 ServiceMethod 中的两个成员 callAdapter 和 parameterHandlers 。callAdapter 是我们在 build retrofit 时候 addCallAdapterFactory(RxJavaCallAdapterFactory.create()) 提供的。parameterHandlers 由 ServiceMethod 中parseParameter 这个函数生成，负责对注解进行处理，构造为 http 请求。所以我们才可以在最开始方便的使用注解的方式来描述 http 请求。想了解注解如何处理的可以详细看一下parameterHandlers相关的函数</p>
+<p>第二行 OkHttpCall okHttpCall = new OkHttpCall&lt;&gt;(serviceMethod, args)<br>OkHttpCall执行具体的网络请求，并解析返回数据。OkHttpCall中进行网络请求的方法主要有两个： execute()执行同步请求，enqueue(Callback<t> callback) 执行异步请求。</t></p>
+<p>第三行 return serviceMethod.callAdapter.adapt(okHttpCall) 回到了最开始说的适配器模式的使用，</p>
+<p>这句话相当于上面类图中的client。</p>
+<p>所有的 callAdapter 都实现接口 CallAdapter<t>，CallAdapter<t> 相当于类图中的Target</t></t></p>
+<p>默认的 DefaultCallAdapterFactory 生成的 callAdapter 直接将 Call 返回，相当于类图中的 Adapter。</p>
+<p>retfofit 中自带的 ExecutorCallAdapterFactory，这个工厂类生成的 CallAdapter 类将 Call<r> 适配成 ExecutorCallbackCall，ExecutorCallbackCall 可以支持回调。</r></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div></pre></td><td class="code"><pre><div class="line"><span class="meta">@Override</span> <span class="keyword">public</span> &lt;R&gt; <span class="function">Call&lt;R&gt; <span class="title">adapt</span><span class="params">(Call&lt;R&gt; call)</span> </span>&#123;</div><div class="line">	<span class="keyword">return</span> <span class="keyword">new</span> ExecutorCallbackCall&lt;&gt;(callbackExecutor, call);</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>这是一个上述类图中Adaptee的实现</p>
+<p>RxJavaCallAdapterFactory，工厂类生成的 SimpleCallAdapter 实现了CallAdapter，将 Call<r> 适配成 Observable，可以用 rxjava 进行相关操作，线程切换等，SimpleCallAdapter 也是上述类图中Adaptee的一种实现。</r></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div></pre></td><td class="code"><pre><div class="line"><span class="meta">@Override</span> <span class="keyword">public</span> &lt;R&gt; <span class="function">Observable&lt;R&gt; <span class="title">adapt</span><span class="params">(Call&lt;R&gt; call)</span> </span>&#123;</div><div class="line">Observable&lt;R&gt; observable = Observable.create(<span class="keyword">new</span> 	CallOnSubscribe&lt;&gt;(call))</div><div class="line">	.lift(OperatorMapResponseToBodyOrError.&lt;R&gt;instance());</div><div class="line">	<span class="keyword">if</span> (scheduler != <span class="keyword">null</span>) &#123;</div><div class="line">		<span class="keyword">return</span> observable.subscribeOn(scheduler);</div><div class="line">	&#125;</div><div class="line">	<span class="keyword">return</span> observable;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>总结一下，retrofit 的特点是解耦的更加彻底。其解耦做的好的原因是因为它应用了大量的设计模式。我们分析了其 callAdatper 上面适配器模式的使用，我们可以实现或者包装自己的请求适配器，实现 CallAdaptet<t> 这个接口，并通过相应的 AdapterFactory 类集成到retrofit 中使用。通过这个分析应该对于 retrofit 网络请求的发送过程也有了进一步的了解。</t></p>
+<h1 id="Reference"><a href="#Reference" class="headerlink" title="Reference"></a>Reference</h1><p><a href="http://www.jianshu.com/p/45cb536be2f4" target="_blank" rel="external">Retrofit分析-漂亮的解耦套路</a></p>
+<p><a href="http://blog.csdn.net/guolin_blog/article/details/17656437" target="_blank" rel="external">Android Volley完全解析(四)</a></p>
+<p><a href="https://developer.android.com/develop/index.html" target="_blank" rel="external">Google Andorid developer doc</a></p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;h1 id=&quot;Android常用网络请求框架简析&quot;&gt;&lt;a href=&quot;#Android常用网络请求框架简析&quot; class=&quot;headerlink&quot; title=&quot;Android常用网络请求框架简析&quot;&gt;&lt;/a&gt;Android常用网络请求框架简析&lt;/h1&gt;&lt;h1 id=&quot;目录&quot;&gt;&lt;a href=&quot;#目录&quot; class=&quot;headerlink&quot; title=&quot;目录&quot;&gt;&lt;/a&gt;目录&lt;/h1&gt;&lt;ul&gt;
+&lt;li&gt;框架做什么&lt;/li&gt;
+&lt;li&gt;常用请求方式&lt;/li&gt;
+&lt;li&gt;Retrofit简析&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h1 id=&quot;框架做什么&quot;&gt;&lt;a href=&quot;#框架做什么&quot; class=&quot;headerlink&quot; title=&quot;框架做什么&quot;&gt;&lt;/a&gt;框架做什么&lt;/h1&gt;&lt;p&gt;网络请求框架是为了方便我们的业务开发而设计的。如果脱离开网络框架可以想象一下Android程序如何发出一个网络请求。需要设置合适的参数（keep-alive，content-type，timeout，get/post等），然后创建一个socket，发出http请求，等待接收响应，解析数据，进行处理。Android还需要一个线程切换，启动一个线程发出请求，handler把结果发送到主线程。上述只是一个网络请求最简单的情况，可能还要涉及复杂的网络请求，上传图片，需要处理缓存，结果异常处理等。&lt;/p&gt;
+&lt;p&gt;这些都是和业务代码没有关系的网络连接的管理。网络请求框架就是帮我们封装这些细节的处理，使可以通过简单的配置就能进行网络请求。&lt;/p&gt;
+&lt;p&gt;框架要做的事情&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;异步请求&lt;/li&gt;
+&lt;li&gt;线程池&lt;/li&gt;
+&lt;li&gt;缓存&lt;/li&gt;
+&lt;li&gt;数据解析&lt;/li&gt;
+&lt;li&gt;错误处理&lt;/li&gt;
+&lt;li&gt;等等&lt;/li&gt;
+&lt;/ul&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="android" scheme="http://decodezero.cn/tags/android/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>图解http读书笔记1</title>
+    <link href="http://decodezero.cn/2016/12/10/%E5%9B%BE%E8%A7%A3http%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B01.html"/>
+    <id>http://decodezero.cn/2016/12/10/图解http读书笔记1.html</id>
+    <published>2016-12-10T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:29.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>这是自己读<em>图解http</em>的读书笔记，没有读 <em>TCP/IP详解 卷1</em>是因为考虑到自己的时间，想碰到具体深入底层的问题时再去查阅。这篇包含了http报文首部和http状态码，这两部分其实放到一起更易贯通。有一些状态码是针对特定首部字段才会出现的。</p>
+<a id="more"></a>
+<h3 id="HTTP报文首部"><a href="#HTTP报文首部" class="headerlink" title="HTTP报文首部"></a>HTTP报文首部</h3><p>http报文首部分为请求报文和响应报文。请求报文包含请求行，请求首部字段，通用首部字段，实体首部字段；响应报文包含状态行，响应首部字段，通用首部字段，实体首部字段。其中请求行包含方法（get，post等）、URI、HTTP版本，状态行包含HTTP版本、状态码。各个首部字段将具体介绍</p>
+<h4 id="通用首部字段"><a href="#通用首部字段" class="headerlink" title="通用首部字段"></a>通用首部字段</h4><ol>
+<li>Cache-Control 进行缓存控制。no-cache是为了防止从缓存中返回过期的资源，客户端的请求中包含它表示客户端不会接收缓存过的响应，服务器返回的响应中包含no-cache，缓存服务器不能对资源进行缓存；no-store是不进行缓存；然后就是一些具体的指定缓存期限和认证的指令如max-age、min-fresh等</li>
+<li><p>Connection 主要用作控制不再转发给代理的首部字段和管理持久连接。</p>
+<p> HTTP首部将定义成缓存代理和非缓存代理的行为，分成了2种。端到端首部（end-to-end）：此类别的首部会发送到最终的接收目标，且必须保存在缓存生成的响应中，必须被转发。逐跳首部(hop-by-hop)：只对单次转发有效，会因为缓存和代理而不再转发。如果要使用hop-by-hop首部，需要提供Connection首部。Connection,Keep-A live,Proxy -A uthenticate,Proxy -A uthorization,Trailer,TE,Transfer-Encoding,Upgrade这八个是hop-by-hop。</p>
+<p> 管理持久连接上面主要由Keep-Alive和Close。http／1.1默认的是持久连接，http／1.1之前的默认是非持久连接</p>
+</li>
+<li><p>Date 创建http报文的日期和时间</p>
+</li>
+<li>Pragma 是http／1.1之前版本的遗留字段，仅作为向后兼容而定义。使用形式如下：Pragma：no-cache。只用在客户端发送的请求中。在http／1.1中直接采用Cache-Control：no-cache，兼容以前版本一般也会加上Pragma：no-cache</li>
+<li>Trailer 事先说明了在报文主体后记录了哪些首部字段。该首部字段可应用在http／1.1版本分块传输编码时。</li>
+<li>Transfer—Encoding 规定了传输报文主体时采用的编码方式，仅对分块传输编码有效。</li>
+<li>Upgrade 用于检测http协议及其他协议是否可使用更高的版本进行通信。Upgrade首部字段产生作用的Upgrade对象仅限于客户端和临接服务器。</li>
+<li>Via 追踪客户端与服务器之间的请求和响应报文的传输路径。可以避免请求回环的发生，在经过代理时必须附加该首部字段内容。各个代理服务器会往via首部添加自身的服务器信息。</li>
+<li>Warning 从http／1.0的Retry-After演变过来的。通常会告知用户一些与缓存相关的问题警告。</li>
+</ol>
+<h4 id="请求首部字段"><a href="#请求首部字段" class="headerlink" title="请求首部字段"></a>请求首部字段</h4><ol>
+<li>Accept 客户端能够处理的媒体类型及媒体类型的相对优先级。优先级权重范围0-1，默认1.0</li>
+<li>Accept-Charset 客户端支持的字符集及字符集的相对优先级。字符集指：iso-8859-5，unicode等</li>
+<li>Accept-Encoding 客户端支持的内容编码及内容编码的优先级。内容编码指：gzip，compress，deflate等</li>
+<li>Accept-Language 支持语言及语言优先级。</li>
+<li>Authorization 认证信息，通常会在收到服务器的401之后，把Authorization及认证信息加入请求中。</li>
+<li>Expect 告知服务器，期望出现某种特定行为。服务器无法满足期望，会返回417</li>
+<li>From 使用用户代理的用户的电子邮件地址。</li>
+<li>Host http／1.1内唯一个必须包含在请求内的首部字段。可以解决一个ip对应多个域名的情况。若服务器未设定主机名，就直接发送一个空值。</li>
+<li>If-xxx 一系列条件，只有结果满足条件才会从服务器返回。</li>
+<li>Max-Forward 最多转发次数</li>
+<li>Proxy-Authorization 客户端和代理之间的认证。</li>
+<li>Range 获取部分资源的范围请求。单位是字节。</li>
+<li>Referer 请求是从哪个uri过来的（正确拼写应该是Referrer，错误的被沿用了）</li>
+<li>TE 客户端能处理的传输编码方式及优先级。和Accept-Encoding的区别是用户传输编码</li>
+<li>User-Agent 创建请求的浏览器和用户代理名称。</li>
+</ol>
+<h4 id="响应首部字段"><a href="#响应首部字段" class="headerlink" title="响应首部字段"></a>响应首部字段</h4><ol>
+<li>Accept-Range 告知客户端服务器是否能处理范围请求。可以时为bytes，不能时为none</li>
+<li>Age 源服务器在多久前创建了响应，代理创建响应时必须加上该字段。单位是秒</li>
+<li>ETag 服务器端资源的唯一标识</li>
+<li>Location 一般在重定向3xx时，返回新的地址</li>
+<li>Proxy-Authenticate 代理服务器所要求的认证信息。</li>
+<li>Retry-After 告知客户端多久之后再次发送请求，主要配合503或者3xx使用</li>
+<li>Server http服务器信息</li>
+<li>Vary 源服务器对代理服务器传达关于使用缓存的一些控制。比如Vary：Accept—Language，则只对含有相同VAccept—Language的请求使用缓存。</li>
+<li>WWW-Authenticate 401返回中肯定会带有这个字段，告知客户端需要认证的信息。</li>
+</ol>
+<h4 id="实体首部字段"><a href="#实体首部字段" class="headerlink" title="实体首部字段"></a>实体首部字段</h4><p>包含在请求报文和响应报文中的实体部门所使用的首部，用于补充内容的更新时间等与实体相关的信息</p>
+<ol>
+<li>Allow 用于通知客户端能够支持的http方法，当返回时405时，会把支持的http方法写入该字段返回。</li>
+<li>Content-Encoding 服务器对实体的主体部分内容的编码方式。如gzip，compress等。</li>
+<li>Content—Language 告知客户端，实体主体使用的自然语言</li>
+<li>Content-Length 实体主体部分的大小，单位是字节。</li>
+<li>Content-Location 给出与报文主体部分对应的uri，和Location不同，比如对于使用Accept-Language的请求，当返回的页面和实际请求的对象不同时，Content-Location会写入实际返回的uri</li>
+<li>Content-MD5 对报文主体部分执行MD5算法，然后再Base64后的结果</li>
+<li>Content—Range 对于客户端的范围请求，告知客户端返回的是哪一部分，如：Content-Range： bytes 5001-10000/10000</li>
+<li>Content-Type 实体主体内对象的媒体类型</li>
+<li>Expires 缓存服务器在Expires字段指定的时间之前，会一直以缓存的内容来响应。超过指定时间后，会转向源服务器请求资源。当通用首部字段Cache-Control有指定的max-age指令时，会优先处理max-age指令。</li>
+<li>Last-Modified 资源最终被修改的时间。</li>
+</ol>
+<h4 id="为cookie服务的首部字段"><a href="#为cookie服务的首部字段" class="headerlink" title="为cookie服务的首部字段"></a>为cookie服务的首部字段</h4><p>cookie没有被编入标准化的http／1.1的RFC2016中。现在使用的是netspace的基准上扩展的</p>
+<ol>
+<li><p>Set-Cookie 用在响应首部字段中，字段包括</p>
+<p> | 属性 | 说明 |<br> |:—–|:———|<br> | NAME=VALUE  | 赋予cookie的名称和其值 |<br> | expires=DATE | 指定浏览器可以发送Cookie的有效期，若省略，其有效期为浏览器关闭之前 |<br> | path=PATH | 将服务器上的文件目录作为Cookie的适用对象，若省略，默认为文档所在的文件目录，不过这个限制可以避开 |<br> | domain=域名 | Cookie适用对象的域名，若省略，默认为创建Cookie的服务器的域名，采用结尾匹配，如指定为a.com, www.a.com, www2.a.com都可以匹配 |<br> | secure | 仅在https的通信时才发送Cookie，通过 Set-Cookie: name=value; secure指定 |<br> | HttpOnly | 使Cookie不能被JS脚本访问,可以防止XSS，通过 Set-Cookie: name=value; HttpOnly指定 |</p>
+</li>
+<li><p>Cookie 用在请求首部字段中，在请求中包含从服务器接收到的Cookie</p>
+</li>
+</ol>
+<h4 id="其它首部字段"><a href="#其它首部字段" class="headerlink" title="其它首部字段"></a>其它首部字段</h4><ol>
+<li>X-Frame-Options 用于控制网站内容在其它web网站的Frame标签内的显示问题，主要为了防止点击劫持（clickjacking）攻击。DENY：拒绝，SAMEORIGIN：仅同源域名下的页面可以加载。</li>
+<li>X-XSS-Protexiont 属于http响应首部，控制浏览器XSS防护机制的开关，0:XSS过滤设置无效，1:XSS过滤设置有效</li>
+<li>DNT 属于http请求首部，0:同意被追踪，1:拒绝被追踪</li>
+<li>P3P 属于http响应首部，利用技术保护个人隐私。</li>
+</ol>
+<h3 id="HTTP状态码"><a href="#HTTP状态码" class="headerlink" title="HTTP状态码"></a>HTTP状态码</h3><p>100-199 用于指定客户端应相应的某些动作。</p>
+<p>200-299 用于表示请求成功。</p>
+<p>300-399 用于已经移动的文件并且常被包含在定位头信息中指定新的地址信息。</p>
+<p>400-499 用于指出客户端的错误。</p>
+<p>500-599 用于支持服务器错误。</p>
+<ul>
+<li>100 continue  服务器仅接收到部分请求，但是一旦服务器并没有拒绝该请求，客户端应该继续发送其余的请求</li>
+<li>200 ok 请求已成功，请求所希望的响应头或数据体将随此响应返回。</li>
+<li>201 Created 请求已经被实现，而且有一个新的资源已经依据请求的需要而建立，且其 URI 已经随Location 头信息返回。</li>
+<li>202 Accepted 服务器已接受请求，但尚未处理。</li>
+<li>203  Non-authoritative Information 服务器已成功处理了请求，但返回了可能来自另一来源的信息。</li>
+<li>204 No Content 服务器已经处理了请求，但没有内容可以返回。浏览器的话显示的页面不更新。</li>
+<li>206 Partial Content 客户端进行了范围请求，服务器成功执行了，返回由Content-Range指定范围的实体内容</li>
+<li>300 Multiple Choices 服务器根据请求可执行多种操作。服务器可根据请求者 来选择一项操作，或提供操作列表供其选择。</li>
+<li>301 Moved Permanently 被请求的资源已永久移动到新位置，并且将来任何对此资源的引用都应该使用本响应返回的若干个 URI 之一</li>
+<li>302 Found 服务器目前正从不同位置的网页响应请求，但请求者应继续使用原有位置来进行以后的请求。临时重定向。</li>
+<li>303 See Other 请求的资源对应着另一个URI，应使用GET方法定向获取请求的资源。和302很相似，但是标准中要求302和301都不能将post方法改成get方法的，不过大多数浏览器都会这么做。</li>
+<li>304 Not Modified 客户端发送附带条件的请求，服务器允许访问资源，但是请求未满足条件表示，服务器资源未改变，可以使用客户端未过期的缓存。客户端发送的附带条件指get方法的请求报文中包含If-Match，If-Modified-Since,If-None-Match,If-Range,If-Unmodified-Since</li>
+<li>307 Temporary Redirect 请求的资源现在临时从不同的URI 响应请求。由于这样的重定向是临时的，客户端应当继续向原有地址发送以后的请求。和302的区别是，会遵照浏览器的标准，不会从post变成get。</li>
+<li>400 Bad Request 1、语义有误，当前请求无法被服务器理解。除非进行修改，否则客户端不应该重复提交这个请求。2、请求参数有误。</li>
+<li>401 Unauthorized 未授权，请求页面需要用户名和密码</li>
+<li>403 Forbidden 禁止, 服务器拒绝请求</li>
+<li>404 Not Found 请求失败，请求所希望得到的资源未被在服务器上发现。</li>
+<li>405 Method Not Allowed 指出请求方法(GET, POST, HEAD, PUT, DELETE, 等)对某些特定的资源不允许使用。</li>
+<li>406 Not Acceptable 服务器生成的响应客户端无法接受</li>
+<li>407 Proxy Authentiacation Required 用户必须首先使用代理服务器进行验证</li>
+<li>408 Request Timeout 请求超出了服务器的等待时间</li>
+<li>410 Gone 被请求的页面不可用</li>
+<li>415 Unsupported Media Type  请求的格式不受请求页面的支持</li>
+<li>417 Excepctation Failed 客户端的请求中加入了Expect字段，服务器无法满足</li>
+<li>500 Internal Server Error   服务器在执行请求时发生了错误，有可能是存在bug</li>
+<li>501 Not Implemented 服务器不支持当前请求所需要的某个功能。当服务器无法识别请求的方法，并且无法支持其对任何资源的请求。</li>
+<li>502 bad gateway，服务器从上游服务器收到一个无效的相应。错误的网关</li>
+<li>503 Service unavailable，服务器临时过载或宕机</li>
+<li>504 Gateway timeout 网关超时</li>
+<li>505 HTTP_VERSION_NOT_SUPPORTED 服务器并不支持在请求中所标明 HTTP 版本。</li>
+</ul>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;这是自己读&lt;em&gt;图解http&lt;/em&gt;的读书笔记，没有读 &lt;em&gt;TCP/IP详解 卷1&lt;/em&gt;是因为考虑到自己的时间，想碰到具体深入底层的问题时再去查阅。这篇包含了http报文首部和http状态码，这两部分其实放到一起更易贯通。有一些状态码是针对特定首部字段才会出现的。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="reader" scheme="http://decodezero.cn/categories/reader/"/>
+    
+    
+      <category term="读书笔记" scheme="http://decodezero.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/"/>
+    
+      <category term="http" scheme="http://decodezero.cn/tags/http/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>react native自定义组件</title>
+    <link href="http://decodezero.cn/2016/11/28/react-native%E8%87%AA%E5%AE%9A%E4%B9%89%E7%BB%84%E4%BB%B6.html"/>
+    <id>http://decodezero.cn/2016/11/28/react-native自定义组件.html</id>
+    <published>2016-11-28T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:25.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>react native在app开发上的一个优势就是组件化开发，当有了足够多的自定义组件后，可以很方便的将这些组件拼装起来，开发效率提高很多。本文中将以一个picker为例子，来讲如何包装一个通用性很强的react native组件。本文的示例源码可以在<a href="https://github.com/haiyangjiajian/ReactNativeUIComponents" target="_blank" rel="external">ReactNativeUIComponents</a>下载。这个项目未来会不断的维护加入更多实用的组件，也力求这个项目可以作为一个react native的示例项目，包含了react native开发中常用的router，navigator，code push等，可以作为参考。</p>
+<a id="more"></a>
+<hr>
+<h3 id="picker的效果"><a href="#picker的效果" class="headerlink" title="picker的效果"></a>picker的效果</h3><p><img src="/assets/img/rn/picker1.png" width="260" height="360" alt="native view"></p>
+<p><img src="/assets/img/rn/picker2.png" width="260" height="360" alt="native view"></p>
+<p>其中picker要展示的内容，百度、搜狗、谷歌等均可以由父组件指定，其样式也可以由父组件指定。</p>
+<h3 id="组件包装"><a href="#组件包装" class="headerlink" title="组件包装"></a>组件包装</h3><h4 id="界面"><a href="#界面" class="headerlink" title="界面"></a>界面</h4><p>本文封装了一个叫Picker的组件。一般推荐通过定义defaultProps来告诉组件的调用者，可以传入这个组件中的参数有哪些。可以看到可以传入的参数有style：组件样式；animationType：动画类型；transparent：是否透明；modalVisible：是否可见；dataArray：显示的数据；title：标题。可以通过传入这些参数，使这个组件拥有不同的样式，显示不同的数据。</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">static</span> defaultProps = &#123;</div><div class="line">    <span class="attr">style</span>: View.propTypes.style,</div><div class="line">    <span class="attr">animationType</span>: <span class="string">'none'</span>,</div><div class="line">    <span class="attr">transparent</span>: <span class="literal">true</span>,</div><div class="line">    <span class="attr">modalVisible</span>: <span class="literal">true</span>,</div><div class="line">    <span class="attr">dataArray</span>: [],</div><div class="line">    <span class="attr">title</span>: <span class="string">'title'</span></div><div class="line">  &#125;;</div><div class="line"></div><div class="line">  <span class="keyword">constructor</span>(props) &#123;</div><div class="line">    <span class="keyword">super</span>(props);</div><div class="line"></div><div class="line">    <span class="keyword">this</span>.state = &#123;</div><div class="line">      <span class="attr">dataSource</span>: <span class="keyword">this</span>._getDataSource(props.dataArray),</div><div class="line">      <span class="attr">style</span>: <span class="keyword">this</span>.props.style,</div><div class="line">      <span class="attr">animationType</span>: <span class="keyword">this</span>.props.animationType,</div><div class="line">      <span class="attr">transparent</span>: <span class="keyword">this</span>.props.transparent,</div><div class="line">      <span class="attr">modalVisible</span>: <span class="keyword">this</span>.props.modalVisible,</div><div class="line">    &#125;;</div><div class="line">  &#125;</div></pre></td></tr></table></figure>
+<p>组件内部的渲染代码如下，主体是一个Modal，然后是一个整体的view</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">&lt;View style=&#123;[styles.modalContainer, &#123;<span class="attr">backgroundColor</span>: <span class="string">'rgba(0, 0, 0, 0.5)'</span>&#125;]&#125;&gt;</div></pre></td></tr></table></figure>
+<p>在这个view中主要有两部分内容，一个是顶部的title，另一个是底部的listview，title显示从父组件中传入的标题，listview显示传入的dataArray。</p>
+<figure class="highlight html"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div></pre></td><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">Modal</span></span></div><div class="line">        <span class="attr">animationType</span>=<span class="string">&#123;this.state.animationType&#125;</span></div><div class="line">        <span class="attr">transparent</span>=<span class="string">&#123;this.state.transparent&#125;</span></div><div class="line">        <span class="attr">visible</span>=<span class="string">&#123;this.state.modalVisible&#125;</span></div><div class="line">        <span class="attr">onRequestClose</span>=<span class="string">&#123;()</span> =&gt; &#123;this._setModalVisible(false)&#125;&#125;&gt;</div><div class="line">        <span class="tag">&lt;<span class="name">View</span> <span class="attr">style</span>=<span class="string">&#123;[styles.modalContainer,</span> &#123;<span class="attr">backgroundColor:</span> '<span class="attr">rgba</span>(<span class="attr">0</span>, <span class="attr">0</span>, <span class="attr">0</span>, <span class="attr">0.5</span>)'&#125;]&#125;&gt;</span></div><div class="line">          <span class="tag">&lt;<span class="name">View</span> <span class="attr">style</span>=<span class="string">&#123;styles.viewContainer&#125;</span>&gt;</span></div><div class="line">            <span class="tag">&lt;<span class="name">View</span> <span class="attr">style</span>=<span class="string">&#123;styles.titleRow&#125;</span>&gt;</span></div><div class="line">              <span class="tag">&lt;<span class="name">TouchableOpacity</span> <span class="attr">style</span>=<span class="string">&#123;styles.cancelButton&#125;</span> <span class="attr">onPress</span>=<span class="string">&#123;()</span> =&gt;</span> &#123;this._setModalVisible(false)&#125;&#125;&gt;</div><div class="line">                <span class="tag">&lt;<span class="name">Image</span> <span class="attr">style</span>=<span class="string">&#123;styles.image&#125;</span></span></div><div class="line">                       <span class="attr">source</span>=<span class="string">&#123;require(</span>'<span class="attr">..</span>/<span class="attr">img</span>/<span class="attr">icon_cancel_grey.png</span>')&#125;/&gt;</div><div class="line">              <span class="tag">&lt;/<span class="name">TouchableOpacity</span>&gt;</span></div><div class="line">              <span class="tag">&lt;<span class="name">Text</span> <span class="attr">style</span>=<span class="string">&#123;[styles.titleText,</span> <span class="attr">styles.modalTitle</span>]&#125;&gt;</span>&#123;this.props.title&#125;<span class="tag">&lt;/<span class="name">Text</span>&gt;</span></div><div class="line">            <span class="tag">&lt;/<span class="name">View</span>&gt;</span></div><div class="line">            <span class="tag">&lt;<span class="name">View</span> <span class="attr">style</span>=<span class="string">&#123;[&#123;marginTop:</span> <span class="attr">0</span>, <span class="attr">marginBottom:</span> <span class="attr">0</span>&#125;]&#125;/&gt;</span></div><div class="line">            <span class="tag">&lt;<span class="name">ListView</span></span></div><div class="line">              <span class="attr">style</span>=<span class="string">&#123;styles.flex&#125;</span></div><div class="line">              <span class="attr">dataSource</span>=<span class="string">&#123;this.state.dataSource&#125;</span></div><div class="line">              <span class="attr">renderRow</span>=<span class="string">&#123;(rowData,</span> <span class="attr">sectionID</span>, <span class="attr">rowID</span>) =&gt; this._renderRow(rowData, sectionID, rowID)&#125;</div><div class="line">              renderScrollComponent=&#123;props =&gt; <span class="tag">&lt;<span class="name">RecyclerViewBackedScrollView</span> &#123;<span class="attr">...props</span>&#125; /&gt;</span>&#125;</div><div class="line">              renderSeparator=&#123;(sectionID, rowID) =&gt; <span class="tag">&lt;<span class="name">View</span> <span class="attr">key</span>=<span class="string">&#123;</span>`$&#123;<span class="attr">sectionID</span>&#125;<span class="attr">-</span>$&#123;<span class="attr">rowID</span>&#125;`&#125; <span class="attr">style</span>=<span class="string">&#123;[GlobalStyles.divider,</span> &#123;<span class="attr">marginTop:</span> <span class="attr">0</span>, <span class="attr">marginBottom:</span> <span class="attr">0</span>, <span class="attr">marginLeft:</span> <span class="attr">16</span>&#125;]&#125;/&gt;</span>&#125;</div><div class="line">            /&gt;</div><div class="line">          <span class="tag">&lt;/<span class="name">View</span>&gt;</span></div><div class="line">        <span class="tag">&lt;/<span class="name">View</span>&gt;</span></div><div class="line"><span class="tag">&lt;/<span class="name">Modal</span>&gt;</span></div></pre></td></tr></table></figure>
+<p>listView中每一个cell的渲染</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div></pre></td><td class="code"><pre><div class="line">_renderRow(rowData, sectionID, rowID) &#123;</div><div class="line">   <span class="keyword">return</span> (</div><div class="line">     <span class="xml"><span class="tag">&lt;<span class="name">TouchableHighlight</span> <span class="attr">onPress</span>=<span class="string">&#123;()</span> =&gt;</span> this._pressRow(rowData, rowID)&#125; underlayColor='gray'&gt;</span></div><div class="line">       <span class="tag">&lt;<span class="name">View</span>&gt;</span></div><div class="line">         <span class="tag">&lt;<span class="name">View</span> <span class="attr">style</span>=<span class="string">&#123;styles.row&#125;</span>&gt;</span></div><div class="line">           <span class="tag">&lt;<span class="name">Text</span> <span class="attr">style</span>=<span class="string">&#123;styles.rowTitle&#125;</span>&gt;</span></div><div class="line">             &#123;rowData.name&#125;</div><div class="line">           <span class="tag">&lt;/<span class="name">Text</span>&gt;</span></div><div class="line">         <span class="tag">&lt;/<span class="name">View</span>&gt;</span></div><div class="line">       <span class="tag">&lt;/<span class="name">View</span>&gt;</span></div><div class="line">     <span class="tag">&lt;/<span class="name">TouchableHighlight</span>&gt;</span></div><div class="line">   );</div><div class="line"> &#125;</div></pre></td></tr></table></figure>
+<p>下面是对这个组件调用的一个示例，puperseItems是一个格式化对象的数组，这个对象包含了name,id,url三个属性</p>
+<figure class="highlight html"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div></pre></td><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">Picker</span></span></div><div class="line">            <span class="attr">title</span>=<span class="string">"选择搜索引擎"</span></div><div class="line">            <span class="attr">dataArray</span>=<span class="string">&#123;purposeItems&#125;</span></div><div class="line">            <span class="attr">selectedData</span>=<span class="string">&#123;(purpose)</span> =&gt; &#123;this.onPurposeSelected(purpose);&#125;&#125;</div><div class="line">            onHideModal=&#123;() =&gt; this.setState(&#123;purposeModalVisible: false&#125;)&#125;</div><div class="line">/&gt;</div></pre></td></tr></table></figure>
+<p>至此界面的展示完毕</p>
+<h4 id="操作"><a href="#操作" class="headerlink" title="操作"></a>操作</h4><p> 这样一个组件主要有两种操作，点击当前列和关闭modal，如下两个函数，主要是调用了父组件传递进来的selectedData和onHideModal回调</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div></pre></td><td class="code"><pre><div class="line">_pressRow(rowData, rowID) &#123;</div><div class="line">  <span class="keyword">this</span>.props.selectedData &amp;&amp; <span class="keyword">this</span>.props.selectedData(rowData);</div><div class="line">  <span class="keyword">this</span>.props.selectedIndex &amp;&amp; <span class="keyword">this</span>.props.selectedIndex(rowID);</div><div class="line">&#125;</div><div class="line"></div><div class="line">_setModalVisible(visible) &#123;</div><div class="line">  <span class="keyword">this</span>.setState(&#123;<span class="attr">modalVisible</span>: visible&#125;);</div><div class="line">  <span class="keyword">if</span> (visible) &#123;</div><div class="line">    <span class="keyword">this</span>.props.onShowModal &amp;&amp; <span class="keyword">this</span>.props.onShowModal();</div><div class="line">  &#125; <span class="keyword">else</span> &#123;</div><div class="line">    <span class="keyword">this</span>.props.onHideModal &amp;&amp; <span class="keyword">this</span>.props.onHideModal();</div><div class="line">  &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>至此完成了一个组件的封装，可以灵活的显示父组件传入的数据，并进行各种交互。</p>
+<p>本文的示例源码可以在<a href="https://github.com/haiyangjiajian/ReactNativeUIComponents" target="_blank" rel="external">ReactNativeUIComponents</a>下载</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;react native在app开发上的一个优势就是组件化开发，当有了足够多的自定义组件后，可以很方便的将这些组件拼装起来，开发效率提高很多。本文中将以一个picker为例子，来讲如何包装一个通用性很强的react native组件。本文的示例源码可以在&lt;a href=&quot;https://github.com/haiyangjiajian/ReactNativeUIComponents&quot;&gt;ReactNativeUIComponents&lt;/a&gt;下载。这个项目未来会不断的维护加入更多实用的组件，也力求这个项目可以作为一个react native的示例项目，包含了react native开发中常用的router，navigator，code push等，可以作为参考。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="react_native" scheme="http://decodezero.cn/tags/react-native/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Android app重新签名和查看已有签名</title>
+    <link href="http://decodezero.cn/2016/11/20/android-app%E9%87%8D%E6%96%B0%E7%AD%BE%E5%90%8D%E5%92%8C%E6%9F%A5%E7%9C%8B%E5%B7%B2%E6%9C%89%E7%AD%BE%E5%90%8D.html"/>
+    <id>http://decodezero.cn/2016/11/20/android-app重新签名和查看已有签名.html</id>
+    <published>2016-11-20T00:08:08.000Z</published>
+    <updated>2018-10-17T05:57:50.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>有时候会需要将一个已经签名的Android apk重新签名。比如oppo软件商店的app认领，它会要求你下载一个空包，并将与认领应用一致的签名写入空包中。可以如下操作</p>
+<a id="more"></a>
+<hr>
+<h3 id="删除原apk签名文件"><a href="#删除原apk签名文件" class="headerlink" title="删除原apk签名文件"></a>删除原apk签名文件</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div></pre></td><td class="code"><pre><div class="line">mkdir <span class="built_in">test</span></div><div class="line">mv TestSign.apk <span class="built_in">test</span></div><div class="line"><span class="built_in">cd</span> <span class="built_in">test</span></div><div class="line">jar -xvf TestSign.apk   //解压apk</div><div class="line">rm -rf META-INF		//删除META-INF</div><div class="line">rm -rf TestSign.apk 	//删除原apk</div><div class="line">jar -cvf ../TestSign.apk ./     //将当前文件夹中的内容打包成apk到外层文件夹</div></pre></td></tr></table></figure>
+<h3 id="生成keystore"><a href="#生成keystore" class="headerlink" title="生成keystore"></a>生成keystore</h3><p>如果打算使用已有keystore，可以不生成，直接进行下一步</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">keytool -genkey -v -keystore test.keystore -alias <span class="built_in">test</span> -keyalg RSA -validity 10000</div></pre></td></tr></table></figure>
+<h3 id="apk重新签名"><a href="#apk重新签名" class="headerlink" title="apk重新签名"></a>apk重新签名</h3><p>最后的“test”与上面生成keystore制定的-alias要一致</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">jarsigner -verbose -keystore test.keystore -signedjar -TestSigned.apk TestSign.apk <span class="built_in">test</span></div></pre></td></tr></table></figure>
+<h3 id="查看生成的apk的签名"><a href="#查看生成的apk的签名" class="headerlink" title="查看生成的apk的签名"></a>查看生成的apk的签名</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div></pre></td><td class="code"><pre><div class="line">mkdir <span class="built_in">test</span></div><div class="line">mv TestSigned.apk <span class="built_in">test</span></div><div class="line"><span class="built_in">cd</span> <span class="built_in">test</span></div><div class="line">jar -xvf TestSign.apk   //解压apk</div><div class="line">keytool -printcert -file  META-INF/xxx.RSA</div></pre></td></tr></table></figure>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;有时候会需要将一个已经签名的Android apk重新签名。比如oppo软件商店的app认领，它会要求你下载一个空包，并将与认领应用一致的签名写入空包中。可以如下操作&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="android" scheme="http://decodezero.cn/tags/android/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>react native与android native代码的集成开发</title>
+    <link href="http://decodezero.cn/2016/10/29/react-native%E4%B8%8Eandroid-native%E4%BB%A3%E7%A0%81%E7%9A%84%E9%9B%86%E6%88%90%E5%BC%80%E5%8F%91.html"/>
+    <id>http://decodezero.cn/2016/10/29/react-native与android-native代码的集成开发.html</id>
+    <published>2016-10-29T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:18.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>这篇文章讲的不是<a href="https://facebook.github.io/react-native/docs/native-modules-android.html" target="_blank" rel="external">native module</a>相关内容，即如何在react native的js代码中调用androd的native代码。也不是<a href="https://facebook.github.io/react-native/docs/native-components-android.html" target="_blank" rel="external">native components</a>相关内容，即如何封装一些原生的组建供react native层使用。这里主要想讲如何在android的应用中，集成react native的页面和如何在react native中启动android activity。这样能达到原生android页面和react native页面互相切换的目的，从而使开发更加灵活。</p>
+<a id="more"></a>
+<p>这篇博客的示例代码在<a href="https://github.com/haiyangjiajian/TestRNIntegrationNative" target="_blank" rel="external">TestRNIntegrationNative</a>可供参考运行</p>
+<hr>
+<h2 id="android应用中集成react-native"><a href="#android应用中集成react-native" class="headerlink" title="android应用中集成react native"></a>android应用中集成react native</h2><p>这部分内容主要从<a href="https://facebook.github.io/react-native/docs/integration-with-existing-apps.html" target="_blank" rel="external">官方文档Integration With Existing Apps </a>android版本翻译而来，根据自己的理解翻译，不是严格对照原文，加入了一些自己在实践过程中碰到的问题</p>
+<h3 id="关键内容"><a href="#关键内容" class="headerlink" title="关键内容"></a>关键内容</h3><p>react native对于从头建立一些新的app非常好用。它同样可以用于在一个已有app的基础上加入一些页面。通过下面几个步骤，可以在已有的app上加入一些基本的react native的功能，页面，view组建等。</p>
+<p>将react native集成到已有andriod app的关键步骤有如下几个：</p>
+<ol>
+<li>理解你想要集成react native的哪个组件</li>
+<li>在你的Android项目的根目录下安装react-native，创建node_modules目录</li>
+<li>用react-native写你需要的组件</li>
+<li>在你的build.gradle文件中添加com.facebook.react:react-native:+和指向node_module下react-native的二进制文件的maven引用</li>
+<li>在android中写一个activity，这个activity创建一个ReactRootView</li>
+<li>打开react-native server，运行app</li>
+<li>增加更多的组件</li>
+<li><a href="https://facebook.github.io/react-native/releases/next/docs/debugging.html" target="_blank" rel="external">调试</a></li>
+<li><a href="https://facebook.github.io/react-native/releases/next/docs/signed-apk-android.html" target="_blank" rel="external">准备</a> <a href="https://facebook.github.io/react-native/docs/running-on-device-android.html" target="_blank" rel="external">发布</a></li>
+<li>部署优化</li>
+</ol>
+<p>下面将详细介绍具体步骤</p>
+<h3 id="准备"><a href="#准备" class="headerlink" title="准备"></a>准备</h3><p>按照<a href="https://facebook.github.io/react-native/docs/getting-started.html" target="_blank" rel="external">getting-started</a>将需要的配置装好</p>
+<h3 id="在app中加入js"><a href="#在app中加入js" class="headerlink" title="在app中加入js"></a>在app中加入js</h3><p>在app的根目录下执行</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div></pre></td><td class="code"><pre><div class="line">npm init</div><div class="line">npm install --save react react-native</div><div class="line">curl -o .flowconfig https://raw.githubusercontent.com/facebook/react-native/master/.flowconfig</div></pre></td></tr></table></figure>
+<p>打开package.json，在scripts中加入</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">&quot;start&quot;: &quot;node node_modules/react-native/local-cli/cli.js start&quot;</div></pre></td></tr></table></figure>
+<p>在index.android.js中加入如下代码，如index.android.js不存在，则在根目录创建一个</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div><div class="line">29</div><div class="line">30</div><div class="line">31</div></pre></td><td class="code"><pre><div class="line"><span class="meta">'use strict'</span>;</div><div class="line"><span class="keyword">import</span> React <span class="keyword">from</span> <span class="string">'react'</span>;</div><div class="line"><span class="keyword">import</span> &#123;</div><div class="line">  AppRegistry,</div><div class="line">  StyleSheet,</div><div class="line">  Text,</div><div class="line">  View</div><div class="line">&#125; <span class="keyword">from</span> <span class="string">'react-native'</span>;</div><div class="line"></div><div class="line"><span class="class"><span class="keyword">class</span> <span class="title">HelloWorld</span> <span class="keyword">extends</span> <span class="title">React</span>.<span class="title">Component</span> </span>&#123;</div><div class="line">  render() &#123;</div><div class="line">    <span class="keyword">return</span> (</div><div class="line">      &lt;View style=&#123;styles.container&#125;&gt;</div><div class="line">        &lt;Text style=&#123;styles.hello&#125;&gt;Hello, World&lt;/Text&gt;</div><div class="line">      &lt;/View&gt;</div><div class="line">    )</div><div class="line">  &#125;</div><div class="line">&#125;</div><div class="line"><span class="keyword">var</span> styles = StyleSheet.create(&#123;</div><div class="line">  <span class="attr">container</span>: &#123;</div><div class="line">    <span class="attr">flex</span>: <span class="number">1</span>,</div><div class="line">    <span class="attr">justifyContent</span>: <span class="string">'center'</span>,</div><div class="line">  &#125;,</div><div class="line">  <span class="attr">hello</span>: &#123;</div><div class="line">    <span class="attr">fontSize</span>: <span class="number">20</span>,</div><div class="line">    <span class="attr">textAlign</span>: <span class="string">'center'</span>,</div><div class="line">    <span class="attr">margin</span>: <span class="number">10</span>,</div><div class="line">  &#125;,</div><div class="line">&#125;);</div><div class="line"></div><div class="line">AppRegistry.registerComponent(<span class="string">'HelloWorld'</span>, () =&gt; HelloWorld);</div></pre></td></tr></table></figure>
+<h3 id="配置当前app"><a href="#配置当前app" class="headerlink" title="配置当前app"></a>配置当前app</h3><p>在app的build.gradle文件中加入如下对react native的依赖</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div></pre></td><td class="code"><pre><div class="line">dependencies &#123;</div><div class="line">    ...</div><div class="line">    compile &quot;com.facebook.react:react-native:+&quot; // From node_modules.</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>如果你想要指定react native的版本，可以将+换成具体的版本号</p>
+<p>在工程的build.gradle中指定所依赖的本地react native的地址</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div></pre></td><td class="code"><pre><div class="line">allprojects &#123;</div><div class="line">    repositories &#123;</div><div class="line">        ...</div><div class="line">        maven &#123;</div><div class="line">            // All of React Native (JS, Android binaries) is installed from npm</div><div class="line">            url &quot;$rootDir/node_modules/react-native/android&quot;</div><div class="line">        &#125;</div><div class="line">    &#125;</div><div class="line">    ...</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>在AndroidManifest.xml中增加网络访问权限</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">&lt;uses-permission android:name=&quot;android.permission.INTERNET&quot; /&gt;</div></pre></td></tr></table></figure>
+<h3 id="增加native代码"><a href="#增加native代码" class="headerlink" title="增加native代码"></a>增加native代码</h3><p>需要有native的代码来启动React Native，并开始渲染。我们在android native代码中新建一个activity，ReactActivity，其中创建了ReactRootView。通过它来启动React Native相关程序。</p>
+<p>tips1: 如果Android version &lt;5,用com.android.support:appcompat下的AppCompatActivity来取代Activity。</p>
+<p>tips2：如果app执行的时候报出Didn’t find class “com.facebook.jni.IteratorHelper”的异常，取消掉setUseOldBridge这句的注释</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div><div class="line">27</div><div class="line">28</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">MyReactActivity</span> <span class="keyword">extends</span> <span class="title">Activity</span> <span class="keyword">implements</span> <span class="title">DefaultHardwareBackBtnHandler</span> </span>&#123;</div><div class="line">    <span class="keyword">private</span> ReactRootView mReactRootView;</div><div class="line">    <span class="keyword">private</span> ReactInstanceManager mReactInstanceManager;</div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onCreate</span><span class="params">(Bundle savedInstanceState)</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>.onCreate(savedInstanceState);</div><div class="line"></div><div class="line">        mReactRootView = <span class="keyword">new</span> ReactRootView(<span class="keyword">this</span>);</div><div class="line">        mReactInstanceManager = ReactInstanceManager.builder()</div><div class="line">                .setApplication(getApplication())</div><div class="line">                .setBundleAssetName(<span class="string">"index.android.bundle"</span>)</div><div class="line">                .setJSMainModuleName(<span class="string">"index.android"</span>)</div><div class="line">                .addPackage(<span class="keyword">new</span> MainReactPackage())</div><div class="line">                .setUseDeveloperSupport(BuildConfig.DEBUG)</div><div class="line">                .setInitialLifecycleState(LifecycleState.RESUMED)</div><div class="line">                <span class="comment">//.setUseOldBridge(true) // uncomment this line if your app crashes</span></div><div class="line">                .build();</div><div class="line">        mReactRootView.startReactApplication(mReactInstanceManager, <span class="string">"HelloWorld"</span>, <span class="keyword">null</span>);</div><div class="line"></div><div class="line">        setContentView(mReactRootView);</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">invokeDefaultOnBackPressed</span><span class="params">()</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>.onBackPressed();</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>其中的HelloWorld，需要与index.android.js中AppRegistry.registerComponent()的第一个参数匹配</p>
+<p>在AndroidManifest.xml中为ReactActivity指定主题。</p>
+<figure class="highlight xml"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div></pre></td><td class="code"><pre><div class="line"><span class="tag">&lt;<span class="name">activity</span></span></div><div class="line">    <span class="attr">android:name</span>=<span class="string">".ReactActivity"</span></div><div class="line">    <span class="attr">android:label</span>=<span class="string">"@string/app_name"</span></div><div class="line">    <span class="attr">android:theme</span>=<span class="string">"@style/Theme.AppCompat.Light.NoActionBar"</span>&gt;</div><div class="line"><span class="tag">&lt;/<span class="name">activity</span>&gt;</span></div></pre></td></tr></table></figure>
+<p>我们需要传递一些callback到ReactInstanceManager中</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div><div class="line">21</div><div class="line">22</div><div class="line">23</div><div class="line">24</div><div class="line">25</div><div class="line">26</div></pre></td><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onPause</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onPause();</div><div class="line"></div><div class="line">    <span class="keyword">if</span> (mReactInstanceManager != <span class="keyword">null</span>) &#123;</div><div class="line">        mReactInstanceManager.onPause();</div><div class="line">    &#125;</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onResume</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onResume();</div><div class="line"></div><div class="line">    <span class="keyword">if</span> (mReactInstanceManager != <span class="keyword">null</span>) &#123;</div><div class="line">        mReactInstanceManager.onResume(<span class="keyword">this</span>, <span class="keyword">this</span>);</div><div class="line">    &#125;</div><div class="line">&#125;</div><div class="line"></div><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onDestroy</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">super</span>.onDestroy();</div><div class="line"></div><div class="line">    <span class="keyword">if</span> (mReactInstanceManager != <span class="keyword">null</span>) &#123;</div><div class="line">        mReactInstanceManager.onDestroy();</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>传递对退出事件的处理到react native中</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div></pre></td><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"> <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onBackPressed</span><span class="params">()</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (mReactInstanceManager != <span class="keyword">null</span>) &#123;</div><div class="line">        mReactInstanceManager.onBackPressed();</div><div class="line">    &#125; <span class="keyword">else</span> &#123;</div><div class="line">        <span class="keyword">super</span>.onBackPressed();</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>这将允许JavaScript可以控制用户按下物理退出键时的处理。如果JS层没有特殊处理，会调用默认的invokeDefaultOnBackPressed，关闭当前默认的activity。</p>
+<p>然后我们需要增加React Native开发的调试菜单。默认React Native是通过摇手机来调出调试菜单的，但是在模拟器上却不能实现。所有我们设置当按android的物理菜单键时，出现React Native 的开发调试菜单（也可以按Ctrl + M）</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div></pre></td><td class="code"><pre><div class="line"><span class="meta">@Override</span></div><div class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">boolean</span> <span class="title">onKeyUp</span><span class="params">(<span class="keyword">int</span> keyCode, KeyEvent event)</span> </span>&#123;</div><div class="line">    <span class="keyword">if</span> (keyCode == KeyEvent.KEYCODE_MENU &amp;&amp; mReactInstanceManager != <span class="keyword">null</span>) &#123;</div><div class="line">        mReactInstanceManager.showDevOptionsDialog();</div><div class="line">        <span class="keyword">return</span> <span class="keyword">true</span>;</div><div class="line">    &#125;</div><div class="line">    <span class="keyword">return</span> <span class="keyword">super</span>.onKeyUp(keyCode, event);</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<h3 id="运行app"><a href="#运行app" class="headerlink" title="运行app"></a>运行app</h3><p>在你已有的app中的某个activity里可以启动我们的ReactActivity了。像这样</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">MainActivity</span> <span class="keyword">extends</span> <span class="title">AppCompatActivity</span> </span>&#123;</div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onCreate</span><span class="params">(Bundle savedInstanceState)</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>.onCreate(savedInstanceState);</div><div class="line">        setContentView(R.layout.activity_main);</div><div class="line">        Button bt = (Button)findViewById(R.id.gotoRN);</div><div class="line">        bt.setOnClickListener(<span class="keyword">new</span> View.OnClickListener() &#123;</div><div class="line">            <span class="meta">@Override</span></div><div class="line">            <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">onClick</span><span class="params">(View view)</span> </span>&#123;</div><div class="line">                Intent intent = <span class="keyword">new</span> Intent();</div><div class="line">                intent.setClass(MainActivity.<span class="keyword">this</span>, ReactActivity.class);</div><div class="line">                startActivity(intent);</div><div class="line">                MainActivity.<span class="keyword">this</span>.finish();</div><div class="line">            &#125;</div><div class="line">        &#125;);</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>打开React Native dev server。在根目录运行</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">npm start</div></pre></td></tr></table></figure>
+<p>然后在android studio里像往常一样运行app就可以了</p>
+<p>tips1: 如果你使用Android Studio来build这个项目，需要在运行npm start之前安装<a href="https://facebook.github.io/watchman/" target="_blank" rel="external">watchman</a>,可以防止Android Studio和React Native包冲突引起的崩溃</p>
+<p>运行如图</p>
+<p><img src="/assets/img/rn/native-view.png" width="300" height="200" alt="native view"></p>
+<p><img src="/assets/img/rn/react-native-view.png" width="300" height="200" alt="native view"></p>
+<h3 id="用Android-Studio打包发布"><a href="#用Android-Studio打包发布" class="headerlink" title="用Android Studio打包发布"></a>用Android Studio打包发布</h3><p>相比较于普通的app打包，要多了一个步骤，在用Android Studio打包之前，执行如下命令生成React Native的bundle。把路径替换成你的真实路径</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">$ react-native bundle --platform android --dev <span class="literal">false</span> --entry-file index.android.js --bundle-output android/com/your-company-name/app-package-name/src/main/assets/index.android.bundle --assets-dest android/com/your-company-name/app-package-name/src/main/res/</div></pre></td></tr></table></figure>
+<h2 id="在react-native的JavaScript代码中启动activtiy"><a href="#在react-native的JavaScript代码中启动activtiy" class="headerlink" title="在react native的JavaScript代码中启动activtiy"></a>在react native的JavaScript代码中启动activtiy</h2><p>实现的核心是在native层封装一个Java的方法供JavaScript调用，封装<a href="https://facebook.github.io/react-native/docs/native-modules-android.html" target="_blank" rel="external">native module</a>。这个Java方法提供了启动其他activity的功能。</p>
+<h3 id="增加native代码-1"><a href="#增加native代码-1" class="headerlink" title="增加native代码"></a>增加native代码</h3><p>首先新建一个Module，这个module中封装了启动一个native activity的方法gotoMainActivity</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">NativeActivityModule</span> <span class="keyword">extends</span> <span class="title">ReactContextBaseJavaModule</span> </span>&#123;</div><div class="line"></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="title">NativeActivityModule</span><span class="params">(ReactApplicationContext reactContext)</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>(reactContext);</div><div class="line">    &#125;</div><div class="line"></div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> String <span class="title">getName</span><span class="params">()</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> <span class="string">"GotoActivity"</span>;</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="meta">@ReactMethod</span></div><div class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">gotoMainActivity</span><span class="params">()</span> </span>&#123;</div><div class="line">        Activity currentActivity = getCurrentActivity();</div><div class="line">        Intent intent = <span class="keyword">new</span> Intent(currentActivity, MainActivity.class);</div><div class="line">        currentActivity.startActivity(intent);</div><div class="line">        currentActivity.finish();</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>新建一个package封装这个module</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div><div class="line">19</div><div class="line">20</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">NativeActivityPackage</span> <span class="keyword">implements</span> <span class="title">ReactPackage</span> </span>&#123;</div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> List&lt;NativeModule&gt; <span class="title">createNativeModules</span><span class="params">(ReactApplicationContext reactContext)</span> </span>&#123;</div><div class="line">        List&lt;NativeModule&gt; modules = <span class="keyword">new</span> ArrayList&lt;&gt;();</div><div class="line"></div><div class="line">        modules.add(<span class="keyword">new</span> NativeActivityModule(reactContext));</div><div class="line"></div><div class="line">        <span class="keyword">return</span> modules;</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">public</span> List&lt;ViewManager&gt; <span class="title">createViewManagers</span><span class="params">(ReactApplicationContext reactContext)</span> </span>&#123;</div><div class="line">        <span class="keyword">return</span> Collections.emptyList();</div><div class="line">    &#125;</div><div class="line"></div><div class="line">    <span class="meta">@Override</span></div><div class="line">    <span class="keyword">public</span> List&lt;Class&lt;? extends JavaScriptModule&gt;&gt; createJSModules() &#123;</div><div class="line">        <span class="keyword">return</span> Collections.emptyList();</div><div class="line">    &#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p>将这个NativeActivityPackage，增加到我们之前创建的ReactActivity中，主要是对mReactInstanceManager增加一个package，addPackage(new NativeActivityPackage())</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div><div class="line">10</div><div class="line">11</div><div class="line">12</div><div class="line">13</div><div class="line">14</div><div class="line">15</div><div class="line">16</div><div class="line">17</div><div class="line">18</div></pre></td><td class="code"><pre><div class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onCreate</span><span class="params">(Bundle savedInstanceState)</span> </span>&#123;</div><div class="line">        <span class="keyword">super</span>.onCreate(savedInstanceState);</div><div class="line"></div><div class="line">        mReactRootView = <span class="keyword">new</span> ReactRootView(<span class="keyword">this</span>);</div><div class="line">        mReactInstanceManager = ReactInstanceManager.builder()</div><div class="line">            .setApplication(getApplication())</div><div class="line">            .setBundleAssetName(<span class="string">"index.android.bundle"</span>)</div><div class="line">            .setJSMainModuleName(<span class="string">"index.android"</span>)</div><div class="line">            .addPackage(<span class="keyword">new</span> MainReactPackage())</div><div class="line">            .setUseDeveloperSupport(BuildConfig.DEBUG)</div><div class="line">            .setInitialLifecycleState(LifecycleState.RESUMED)</div><div class="line">            .addPackage(<span class="keyword">new</span> NativeActivityPackage())</div><div class="line">            <span class="comment">//.setUseOldBridge(true) // uncomment this line if your app crashes</span></div><div class="line">            .build();</div><div class="line">        mReactRootView.startReactApplication(mReactInstanceManager, <span class="string">"HelloWorld"</span>, <span class="keyword">null</span>);</div><div class="line"></div><div class="line">        setContentView(mReactRootView);</div><div class="line">    &#125;&#125;</div></pre></td></tr></table></figure>
+<h3 id="在JavaScript层中调用封装的方法"><a href="#在JavaScript层中调用封装的方法" class="headerlink" title="在JavaScript层中调用封装的方法"></a>在JavaScript层中调用封装的方法</h3><figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">const</span> GotoActivity = NativeModules.GotoActivity;</div><div class="line"></div><div class="line"><span class="xml"><span class="tag">&lt;<span class="name">TouchableOpacity</span> <span class="attr">style</span>=<span class="string">&#123;styles.button&#125;</span> <span class="attr">onPress</span>=<span class="string">&#123;()</span> =&gt;</span> &#123;GotoActivity.gotoMainActivity()&#125;&#125;&gt;</span></div><div class="line">            <span class="tag">&lt;<span class="name">Text</span> <span class="attr">style</span>=<span class="string">&#123;styles.gotoNative&#125;</span>&gt;</span>Goto Native<span class="tag">&lt;/<span class="name">Text</span>&gt;</span></div><div class="line"><span class="tag">&lt;/<span class="name">TouchableOpacity</span>&gt;</span></div></pre></td></tr></table></figure>
+<p>至此我们完成了在android的应用中，集成react native的页面和如何在react native中启动android activity，这样能达到原生android页面和react native页面互相切换的目的。这篇博客的示例代码在<a href="https://github.com/haiyangjiajian/TestRNIntegrationNative" target="_blank" rel="external">TestRNIntegrationNative</a>可供参考运行</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;这篇文章讲的不是&lt;a href=&quot;https://facebook.github.io/react-native/docs/native-modules-android.html&quot;&gt;native module&lt;/a&gt;相关内容，即如何在react native的js代码中调用androd的native代码。也不是&lt;a href=&quot;https://facebook.github.io/react-native/docs/native-components-android.html&quot;&gt;native components&lt;/a&gt;相关内容，即如何封装一些原生的组建供react native层使用。这里主要想讲如何在android的应用中，集成react native的页面和如何在react native中启动android activity。这样能达到原生android页面和react native页面互相切换的目的，从而使开发更加灵活。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="android" scheme="http://decodezero.cn/tags/android/"/>
+    
+      <category term="react_native" scheme="http://decodezero.cn/tags/react-native/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Jekyll搭建博客并添加百度统计</title>
+    <link href="http://decodezero.cn/2016/10/25/Jekyll%E6%90%AD%E5%BB%BA%E5%8D%9A%E5%AE%A2%E5%B9%B6%E6%B7%BB%E5%8A%A0%E7%99%BE%E5%BA%A6%E7%BB%9F%E8%AE%A1.html"/>
+    <id>http://decodezero.cn/2016/10/25/Jekyll搭建博客并添加百度统计.html</id>
+    <published>2016-10-25T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:05.000Z</updated>
+    
+    <content type="html"><![CDATA[<p> 自己的这个博客是在gitpage上用Jekyll搭建起来的，使用的是<a href="https://mmistakes.github.io/hpstr-jekyll-theme/theme-setup/" target="_blank" rel="external">这个模版</a>。搭建以后一直是在github上build的，也没有添加点击统计的工具。下面介绍一下自己完成这本地build和添加百度统计的过程和遇到的问题。</p>
+<a id="more"></a>
+<hr>
+<h3 id="添加百度统计"><a href="#添加百度统计" class="headerlink" title="添加百度统计"></a>添加百度统计</h3><p>现在有很多站长工具可以统计网站的点击量。添加方式大同小异。我添加的是<a href="http://tongji.baidu.com/web/welcome/login" target="_blank" rel="external">百度统计</a>。注册添加后，会得到如下一段javaScript：</p>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div></pre></td><td class="code"><pre><div class="line">&lt;script&gt; </div><div class="line"><span class="keyword">var</span> _hmt = _hmt || [];</div><div class="line">(<span class="function"><span class="keyword">function</span>(<span class="params"></span>) </span>&#123;</div><div class="line">  <span class="keyword">var</span> hm = <span class="built_in">document</span>.createElement(<span class="string">"script"</span>);</div><div class="line">  hm.src = <span class="string">"//hm.baidu.com/hm.js?xxxxxxxxxxxxxxxxxxxxxxxxxxx"</span>;</div><div class="line">  <span class="keyword">var</span> s = <span class="built_in">document</span>.getElementsByTagName(<span class="string">"script"</span>)[<span class="number">0</span>]; </div><div class="line">  s.parentNode.insertBefore(hm, s);</div><div class="line">&#125;)();</div><div class="line">&lt;/script&gt;</div></pre></td></tr></table></figure>
+<p>需要将这段代码添加到网站全部页面的head标签前。对于Jekyll的网站来说可以通过以下三个步骤来实现：</p>
+<ul>
+<li>修改_config.yml，加入</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">baidu-analysis： xxxxxxxxxxxxxxxxxxxxxxxxxxx</div></pre></td></tr></table></figure>
+<ul>
+<li>在_include中新建文件baidu-anaylysis.html加入以下代码</li>
+</ul>
+<figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div><div class="line">9</div></pre></td><td class="code"><pre><div class="line">&lt;script&gt;</div><div class="line">  <span class="keyword">var</span> _hmt = _hmt || [];</div><div class="line">  (<span class="function"><span class="keyword">function</span>(<span class="params"></span>) </span>&#123;</div><div class="line">    <span class="keyword">var</span> hm = <span class="built_in">document</span>.createElement(<span class="string">"script"</span>);</div><div class="line">    hm.src = <span class="string">"//hm.baidu.com/hm.js?&#123;&#123; site.baidu-analyisis &#125;&#125;"</span>;</div><div class="line">    <span class="keyword">var</span> s = <span class="built_in">document</span>.getElementsByTagName(<span class="string">"script"</span>)[<span class="number">0</span>];</div><div class="line">    s.parentNode.insertBefore(hm, s);</div><div class="line">  &#125;)();</div><div class="line">&lt;/script&gt;</div></pre></td></tr></table></figure>
+<ul>
+<li>在博客的入口网页中添加</li>
+</ul>
+<p><img src="/assets/img/2016-10-25-include.jpg" alt="include"></p>
+<p>Jekyll的入口一般在 _layouts/default.html中。我的模版因为将header统一抽取了出来，加在了_includes/head.html中。</p>
+<ul>
+<li>在百度统计的网站中心tab中检查首页代码状态，显示代码安装正确，就成功了。</li>
+</ul>
+<h3 id="本地build-Jekyll"><a href="#本地build-Jekyll" class="headerlink" title="本地build Jekyll"></a>本地build Jekyll</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div></pre></td><td class="code"><pre><div class="line">gem install bundler</div><div class="line">bundle install</div><div class="line">bundle <span class="built_in">exec</span> jekyll serve</div></pre></td></tr></table></figure>
+<p>注意在config_yml中不能有tab，否则会提示‘found character that cannot start any token while scanning for the next token at line’的错误。</p>
+<p>本地server启动后可以在<a href="http://localhost:4000/" target="_blank" rel="external">http://localhost:4000/</a> 访问</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt; 自己的这个博客是在gitpage上用Jekyll搭建起来的，使用的是&lt;a href=&quot;https://mmistakes.github.io/hpstr-jekyll-theme/theme-setup/&quot;&gt;这个模版&lt;/a&gt;。搭建以后一直是在github上build的，也没有添加点击统计的工具。下面介绍一下自己完成这本地build和添加百度统计的过程和遇到的问题。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="tool" scheme="http://decodezero.cn/categories/tool/"/>
+    
+    
+      <category term="tools" scheme="http://decodezero.cn/tags/tools/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>react native related problems and solutions</title>
+    <link href="http://decodezero.cn/2016/08/09/react-native-related-problems-and-solutions.html"/>
+    <id>http://decodezero.cn/2016/08/09/react-native-related-problems-and-solutions.html</id>
+    <published>2016-08-09T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:14.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>将用博客来记录自己在react native开发过程中遇到的问题，这篇主要侧重于配置过程中用到的问题。这种问题可能只需要一个合适的答案，找寻这个答案可能需要花费半天的工作时间，甚至更久。</p>
+<a id="more"></a>
+<ol>
+<li><p>error: could not install smartsocket listener: Address already in use</p>
+<p> 解决方法：genymotion的adb设置Android sdk</p>
+</li>
+<li><p>cant find local.properties</p>
+<p> 解决方法：手动添加文件，然后sdk.dir=xx</p>
+</li>
+<li><p>Undefined symbols for architecture x86_64: “std::terminate()”<br> 解决方法：I ran in to this issue as well, and the solution @charpeni proposed solved the issue. To be clear for others, if you are upgrading to 0.26+ then you need to make the following changes.<br> In ios/YourProject.xcodeproj/project.pbxproj, look for the two lines like OTHER_LDFLAGS = “-ObjC”;. Replace them with the following:</p>
+ <figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div></pre></td><td class="code"><pre><div class="line">	OTHER_LDFLAGS = (</div><div class="line">       <span class="string">"-ObjC"</span>,</div><div class="line">       <span class="string">"-lc++"</span>,</div><div class="line">);</div></pre></td></tr></table></figure>
+</li>
+<li><p>react-native run-android时出现Could not download imagepipeline.aar</p>
+<p> 解决方法：修改build.gradle的版本，com.android.tools.build:gradle:2.1.0，改为更高的，然后更改gradle/wrapper/gradle-wrapper.properties中相应的gradle-2.10-all.zip。</p>
+</li>
+<li><p>Application ReactExample has not been registered. This is either due to a require() error during initialization or failure to call AppRegistry.registerComponent.</p>
+<p> 解决方法： 关掉其他react-native server和node进程</p>
+</li>
+</ol>
+<ol>
+<li><p>realm对于schema的更新需要重新启动应用，如果应用已经在本地数据库中写入了数据，则需要将应用删除，重装，因为schema和已有数据会存在冲突。</p>
+</li>
+<li><p>自己react-native init test.然后测试realm。在ios端总是提示‘Cannot read property ‘debugHosts’ of undefined’ 和‘Module AppRegistry is not a registered callable module’</p>
+<p> 解决方法：是rnpm的问题，对于ios项目来说，project name中不能有excample和test,需要在packaje.json中加入。但是自己测试并没有成功。测试将project name命名为其他可以。Realm团队称在下一个版本中会修复这个问题</p>
+ <figure class="highlight javascript"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div></pre></td><td class="code"><pre><div class="line"><span class="string">"rnpm"</span>: &#123;</div><div class="line">	<span class="string">"ios"</span>: &#123;</div><div class="line">	<span class="string">"project"</span>: <span class="string">"ios/&lt;project-name&gt;.xcodeproj"</span></div><div class="line">	&#125;</div><div class="line">&#125;</div></pre></td></tr></table></figure>
+<p> 对于andorid新建的包含realm的rn项目中还会有’Missing Realm constructor-please ensure RealmReact framework is included’的问题</p>
+<p> 解决方法是在MainApplication.java中添加如下两行</p>
+ <figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div><div class="line">8</div></pre></td><td class="code"><pre><div class="line"><span class="keyword">import</span> io.realm.react.RealmReactPackage; <span class="comment">// ADD THIS</span></div><div class="line">  <span class="meta">@Override</span></div><div class="line">    <span class="function"><span class="keyword">protected</span> List&lt;ReactPackage&gt; <span class="title">getPackages</span><span class="params">()</span> </span>&#123;</div><div class="line">      <span class="keyword">return</span> Arrays.&lt;ReactPackage&gt;asList(</div><div class="line">          <span class="keyword">new</span> MainReactPackage(),</div><div class="line">          <span class="keyword">new</span> RealmReactPackage() <span class="comment">// AND THIS</span></div><div class="line">      );</div><div class="line">    &#125;</div></pre></td></tr></table></figure>
+</li>
+</ol>
+<p>  如在android中出现“Project with path ‘:realm’ could not be found in project ‘:app’. realm”的问题，则需要在setting.gradle中添加</p>
+<pre><code><figure class="highlight java"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div></pre></td><td class="code"><pre><div class="line">include <span class="string">':realm'</span></div><div class="line">project(<span class="string">':realm'</span>).projectDir = <span class="keyword">new</span> File(settingsDir, <span class="string">'../node_modules/realm/android'</span>)</div></pre></td></tr></table></figure>
+</code></pre><ol>
+<li><p>react native realm的可视化<br>官方文档中只介绍了Objective-C，Java，Swift中有realm的可视化工具Realm Browser（暂时只支持mac），在react native中也可以使用。</p>
+ <figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div></pre></td><td class="code"><pre><div class="line">console.log(db.path);//输出realm在模拟器上存储的目录</div><div class="line">adb pull /data/data/&lt;packagename&gt;/files/ . //从模拟器上或者真机（需要root）拉取realm文件</div></pre></td></tr></table></figure>
+<p> 用Realm Browser打开即可，默认名字是default.realm</p>
+</li>
+<li><p>在./gradlew assembleRelease的时候报错：<br>Execution failed for task ‘:app:bundleReleaseJsAndAssets’. A problem occurred starting process ‘command ‘node’’</p>
+</li>
+</ol>
+<p>执行</p>
+<pre><code><figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">./gradlew --stop</div></pre></td></tr></table></figure>
+
+停掉后台deamon进程，重新打包即可。
+</code></pre><ol>
+<li><p>react native unable to resolve module react/lib/ReactUpdates</p>
+<p><img src="/public/img/rn/unable_to_resolve.jpeg" width="300" height="200" alt="ReactUpdates" align="center"></p>
+<p>在<a href="https://github.com/facebook/react-native/issues/4968" target="_blank" rel="external">facebook issue 4968</a>中对这个问题有一些讨论，但是我试了较为普遍的回答：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div></pre></td><td class="code"><pre><div class="line">watchman watch-del-all</div><div class="line">npm cache clean &amp;&amp; npm install</div></pre></td></tr></table></figure>
+<p>对于我的情况并不生效。后来发现是由于react-native和react版本不匹配造成的。执行</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">npm install react@~15.3.1 --save</div></pre></td></tr></table></figure>
+<p>问题fix，15.3.1是对于我比较合适的版本</p>
+</li>
+<li><p>运行时出现错误Got JS Exception: ReferenceError: Can’t find variable: process，并在npm install时提示react-native@0.35.0 requires a peer of react@~15.3.1 but none was installed.</p>
+<p>这个问题同样是因为react的版本不对执行</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">npm install react@~15.3.1 --save</div></pre></td></tr></table></figure>
+<p>问题fix</p>
+</li>
+</ol>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;将用博客来记录自己在react native开发过程中遇到的问题，这篇主要侧重于配置过程中用到的问题。这种问题可能只需要一个合适的答案，找寻这个答案可能需要花费半天的工作时间，甚至更久。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="react_native" scheme="http://decodezero.cn/tags/react-native/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>react native 痛点与优势</title>
+    <link href="http://decodezero.cn/2016/08/09/react-native%E7%97%9B%E7%82%B9%E4%B8%8E%E4%BC%98%E5%8A%BF.html"/>
+    <id>http://decodezero.cn/2016/08/09/react-native痛点与优势.html</id>
+    <published>2016-08-09T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:21.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>随着自己对react native开发的深入，对于其一些痛点和优势也有着更深的体会</p>
+<hr>
+<h3 id="react-native的痛点"><a href="#react-native的痛点" class="headerlink" title="react native的痛点"></a>react native的痛点</h3><ol>
+<li>由于还不是稳定版本，版本更新太快，大概两周会有一个新的版本。更新新版可能会出现不兼容的问题，有时候需要手动解决。</li>
+</ol>
+<a id="more"></a>
+<ol>
+<li>支持的组件不全面。大部分厂商并不支持react native。一些支持的现在一般也处在不稳定版本。比如截止到rn版本0.35，js版的本地数据库组件只有realm支持，现在realm版本为0.15，很多功能不全。</li>
+<li>程序的性能。现在普遍都说比原生的性能要差，但是差多少没有一个具体的衡量。直观的感觉是复杂的页面在一些配置较低的手机上会有肉眼可见卡顿的感觉。</li>
+<li>虽然大多界面可以同时生成ios和android的，但一些涉及到底层的东西需要在ios和android单独开发，然后在js层进行调用。</li>
+<li>学习成本高。要学习<a href="https://zhuanlan.zhihu.com/p/22782487" target="_blank" rel="external">javascript系列东西</a>，还需要涉及到ios，android开发相关知识。相比较而言，一个用过react的前端开发，写rn应该上手更快。</li>
+<li>关于react native的开发现在并没有一些best practice，也没有真正很有经验的人，很多只能摸索。对于小团队来说，试错成本有点高，一旦卡在一些问题上，网上解决方案很少，容易耽误了整体的进度。招聘有相关经验的人也较难。</li>
+</ol>
+<h3 id="react-native优势"><a href="#react-native优势" class="headerlink" title="react native优势"></a>react native优势</h3><ol>
+<li>组件化开发，复用率高，组件丰富以后，ui开发较快，前端式开发。</li>
+<li>同时支持android和ios的ui界面。</li>
+<li>可以方便的进行代码热更新。</li>
+<li>Learn once,write anywhere，未来js可能会有更大的通用性，比如现在微信小程序的开发技术和react native十分相似。现在还有用react native开发<a href="https://github.com/ptmt/react-native-macos" target="_blank" rel="external">mac桌面应用</a>，开发<a href="https://github.com/necolas/react-native-web" target="_blank" rel="external">web网页</a></li>
+<li>可以和原生页面互相调用，作为一部分嵌入到一个已有的原生app中。</li>
+<li>它是一种介于在webview和原生开发之间的解决方案，它想要实现像web一样灵活，像原生一样的性能，虽然现在还都没有达到，但是它是一种有可能接近这个目标的解决方案。</li>
+</ol>
+<p>待续。。。</p>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;随着自己对react native开发的深入，对于其一些痛点和优势也有着更深的体会&lt;/p&gt;
+&lt;hr&gt;
+&lt;h3 id=&quot;react-native的痛点&quot;&gt;&lt;a href=&quot;#react-native的痛点&quot; class=&quot;headerlink&quot; title=&quot;react native的痛点&quot;&gt;&lt;/a&gt;react native的痛点&lt;/h3&gt;&lt;ol&gt;
+&lt;li&gt;由于还不是稳定版本，版本更新太快，大概两周会有一个新的版本。更新新版可能会出现不兼容的问题，有时候需要手动解决。&lt;/li&gt;
+&lt;/ol&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="react_native" scheme="http://decodezero.cn/tags/react-native/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>git实用技巧</title>
+    <link href="http://decodezero.cn/2016/08/02/git.html"/>
+    <id>http://decodezero.cn/2016/08/02/git.html</id>
+    <published>2016-08-02T00:08:08.000Z</published>
+    <updated>2018-10-17T05:57:58.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>在工作之中使用git，除了常用的clone，add，commit，push，fetch，pull，merge等还会经常出现一些其他需要解决的问题，现在将其总结下:</p>
+<a id="more"></a>
+<ol>
+<li>忘记添加.gitignore</li>
+</ol>
+<pre><code>GIT新手最容易犯的一个错误就是没有添加.gitignore，而把不该上传的东西上传了， 而GIT老手有时会因为在规则里面写了个.*而导致.gitignore没有加入到版本控制当中， 事后才发现，但此时项目中已充斥了“垃圾”。
+
+此时项目管理者才追悔莫及，修改.gitignore并提交到版本控制当中。 但大错已铸成，新添的.gitignore不会影响已经加入到项目中的文件，GIT老手此时也可能没有什么好办法， 只能把不该有的东西手动删除掉，再重新提交。但更麻烦的是，这些“垃圾”可能还有用， 如Java项目中依赖的一些*.jar库文件，直接删了会出问题，要在修好项目后重新加回来。 如果只有几个文件还好，如果成百上千，这样操作，一天都不用干别的了。
+
+但问题总会有聪明办法解决。GIT中用git rm --cached xxx可以在不动项目当前工作空间的情况下， 将文件从当前（未提交）版本中移除。如此而来简单方法就出来了：
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div></pre></td><td class="code"><pre><div class="line">git rm -r --cached .</div><div class="line">git add .</div><div class="line">git commit -m <span class="string">".gitignore is now working"</span></div></pre></td></tr></table></figure>
+
+[参照这里](http://davidaq.com/technique/share/2015/04/22/gitignore-update.html)
+</code></pre><ol>
+<li><p>git 取消push</p>
+ <figure class="highlight plain"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div><div class="line">5</div><div class="line">6</div><div class="line">7</div></pre></td><td class="code"><pre><div class="line">方法1:</div><div class="line">	1. git reset -\-hard HEAD~1</div><div class="line">	2. 然后再使用git push origin &quot;your branch name&quot; -\-force将本次变更强行推送至服务器。这样在服务器上的最后一次错误提交也彻底消失了。</div><div class="line"></div><div class="line">方法2:</div><div class="line">	1. 在本地git revert，覆盖掉上一次的commit</div><div class="line">	2. git push origin &quot;your branch name&quot;</div></pre></td></tr></table></figure>
+</li>
+<li><p>git reflog</p>
+<p> git reflog/git log -g记录每次修改head的操作，可以查看所有历史修改记录,然后    通过git reset命令进行恢复</p>
+</li>
+<li><p>git merge和git rebase</p>
+<p> 如果需要merge远程分支的东西，尽量不要用git pull。 可以使用：</p>
+ <figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div></pre></td><td class="code"><pre><div class="line">git fetch origin</div><div class="line">git rebase origin/master   // 可以理解为：将服务器master分支映射到本地的一个临时分支上，然后将本地分支上的变化合并到这个临时分支，然后再用这个临时分支初始化本地分支</div></pre></td></tr></table></figure>
+</li>
+<li><p>git stash</p>
+<p> git stash 将未commit改变缓存,不保存新加的文件</p>
+<p> git stash list 展示栈列表</p>
+<p> git stash apply {stash@{2}} 应用某次栈中的内容</p>
+<p> git stash pop 应用栈顶内容并弹栈</p>
+<p> git stash clear 清空队列</p>
+</li>
+<li><p>git revert和git reset</p>
+<p> git revert是用一个新的提交取消掉了之前的一个错误提交</p>
+<p> git reset取消掉最近一次commit后add的</p>
+<p> git reset []回到那一次commit，并且将撤销掉的文件的提交恢复成未提交的状态</p>
+<p> git reset –hard 回到那一次commit，所有过程中的文件都没了</p>
+</li>
+<li><p>git自动补全</p>
+<p> <a href="https://github.com/git/git/blob/master/contrib/completion/git-completion.bash" target="_blank" rel="external">参见github</a></p>
+</li>
+<li><p>单独统计每个人的增删行数</p>
+ <figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">git <span class="built_in">log</span> --format=<span class="string">'%aN'</span> | sort -u | <span class="keyword">while</span> <span class="built_in">read</span> name; <span class="keyword">do</span> <span class="built_in">echo</span> -en <span class="string">"<span class="variable">$name</span>\t"</span>; git <span class="built_in">log</span> --author=<span class="string">"<span class="variable">$name</span>"</span> --pretty=tformat: --numstat | awk <span class="string">'&#123; add += $1; subs += $2; loc += $1 - $2 &#125; END &#123; printf "added lines: %s, removed lines: %s, total lines: %s\n", add, subs, loc &#125;'</span> -; <span class="keyword">done</span></div></pre></td></tr></table></figure>
+</li>
+<li><p>打tag</p>
+ <figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div><div class="line">2</div><div class="line">3</div><div class="line">4</div></pre></td><td class="code"><pre><div class="line">git tag <span class="_">-a</span> v1.1.2 -m <span class="string">'my version'</span> 新增tag</div><div class="line">git push origin v1.1.2 将新建的tag推到远端</div><div class="line">git tag 列出现有标签</div><div class="line">git show v1.1.2 查看相应标签的信息</div></pre></td></tr></table></figure>
+</li>
+<li><p>错误的创建了一个文件config.java提交了以后，发现应该改为大写Config.java。但是执行git status后没有任何提示。研究后发现原因是：git 默认对于文件名大小写是不敏感的，上面修改了首字母大写,但是git并没有发现代码任何改动。解决方案是配置git config使它对大小写敏感</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">git config core.ignorecase <span class="literal">false</span></div></pre></td></tr></table></figure>
+</li>
+<li><p>git rebase</p>
+<p>最低要求是没有别人正在这个分支上工作，但是即使只有自己工作在这个分枝上，如果曾经将这个分枝push到server过，本地rebase分枝B，再push到server，本地的B会和server的B发生冲突，不得不merge或者git push -f。所以最好rebase一个从没有push到server过的分枝。</p>
+<p>rebase并不是将B的commit如C直接移动到了别的分枝上，而是创建了一个副本C1，二者的hashcode并不相同</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><div class="line">1</div></pre></td><td class="code"><pre><div class="line">git rebase -i master 交互式的rebase</div></pre></td></tr></table></figure>
+</li>
+<li><p>WIP标志<br>一些merge request可能并不希望被merge可以将其title以[WIP] 或者 WIP:开头，这样不会被merge，知道标题中移除了[WIP] 或者 WIP:</p>
+</li>
+</ol>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;在工作之中使用git，除了常用的clone，add，commit，push，fetch，pull，merge等还会经常出现一些其他需要解决的问题，现在将其总结下:&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="tool" scheme="http://decodezero.cn/categories/tool/"/>
+    
+    
+      <category term="tools" scheme="http://decodezero.cn/tags/tools/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>java面试中高频的30个问题</title>
+    <link href="http://decodezero.cn/2016/08/02/30-Java-interview-questions.html"/>
+    <id>http://decodezero.cn/2016/08/02/30-Java-interview-questions.html</id>
+    <published>2016-08-02T00:08:08.000Z</published>
+    <updated>2018-10-17T05:57:44.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>在网上看到了这篇文章<a href="http://javarevisited.blogspot.sg/2014/02/top-30-java-phone-interview-questions.html" target="_blank" rel="external">30个最常被问的java面试题</a>发现这些问题和答案还挺有价值的，将其翻译总结一下。有些地方觉得英语更容易表示就直接引用了原文</p>
+<a id="more"></a>
+<ol>
+<li><p>为什么String不可变</p>
+<p> 安全性和效率两方面的考虑，String常量在堆中的常量池中。</p>
+</li>
+<li><p>抽象类可以有构造方法吗</p>
+<p> 可以，默认编译器会生成的，因为子类要调用父类的构造方法。</p>
+</li>
+<li><p>Object中哪两个函数被重写是为了hashtable</p>
+<p> equal和hashCode</p>
+</li>
+<li><p>sleep，yield和wait的区别</p>
+<p>wait是Object的函数，yield和sleep是Thread的函数。wait在同步中调用，释放所占用资源给其他线程，被notify唤醒。sleep只是将当前线程暂停一会儿，不会释放资源。yield只是释放当前线程的cpu资源，交给线程调度器来决定谁将得到cpu</p>
+</li>
+<li><p>List和Set的区别</p>
+<p> List有重复，Set没有重复；List有序，Set无序，但是有SortedSet，Set用equals比较，SortedSet用comparable和comparator比较；ArrayList, Vector and LinkedList实现List，HashSet和TreeSet实现Set</p>
+</li>
+<li><p>Java怎么构建不可变的类，如String<br>  构造函数执行之后对象的状态不再可变，任何改变都会导致产生一个新的对象；所有的域都应该是final的；对象在构造的时候一定不要把它的引用泄漏出去；class声明成final的，防止继承的类改变它。</p>
+</li>
+<li><p>Java用什么来表示现金或者财务的计算</p>
+<p> 用long或者BigDecimal，不要用float或者double，因为不精确。BigDecimal用字符串来初始化。</p>
+</li>
+<li><p>抽象类和interface用哪个</p>
+<p>  用抽象类会失去唯一的继承的机会，比如Runnable和Thread的选择；抽象类中可以有具体的方法，它更适合在演进或者不断变化的类，在抽象类中改变了，所有的子类都会影响到，接口需要改变所有的子类；Interface很适合作为一种接口来定义；抽象类是IS-A的层次 ，接口是 CAN-DO-THIS 的层次；定义一个飞的接口，鸟类可以用，飞机也可以用；List is declared as interface and extends Collection and Iterable interface and AbstractList is an abstract class which implements List. AbstractList provides skeletal implementation of List interface；</p>
+</li>
+<li><p>HashTable和HashMap的区别</p>
+<p> HashTable是线程安全的，HashMap不是，需要额外的同步Map m = Collections.synchronizeMap(hashMap)，所以table比较慢；Map可以插入空的key或者value；HashMap和HashTable是用Hash实现的，TreeMap是用红黑树实现的。</p>
+</li>
+<li><p>ArrayList和LinkedList的相同和不同<br>相同：都是继承自List；都不是同步的；有序的；允许重复；<br>不同：数据结构不同；Deque是用Linked实现的；增删改查不同；Linked用memory多一些</p>
+</li>
+<li><p>Overloading and Overriding（重载和重写）</p>
+<p>重载时发生在编译时的，重写时发生在运行时。只有虚函数可以被重写，static，final和private的方法在java中都不能被重写</p>
+</li>
+<li><p>Java有几种引用类型</p>
+<p> Strong reference, Weak references, Soft reference and Phantom reference. Except strong, all other reference allows object to be garbage collected. For example, if an object hash only weak reference, than it’s eligible for GC, if program needs space</p>
+</li>
+<li><p>Checked vs Unchecked Exception</p>
+<p> 继承自Exception但是不继承RunTimeException的是Checked的。RunTimeException和继承自Error的是Unchecked Exception。Checked是被编译器检查的，如果块内有exception抛出，要有try，catch块。Unchecked举例：NullPointerException，ArrayIndexOutOfBound，llegalArgumentException，llegalStateException，OutOfMemmoryError。</p>
+</li>
+<li><p>Java的array是Object的实例吗</p>
+<p>是，它还有length属性；他的长度是固定的</p>
+</li>
+<li><p>Does List<number> can hold Integers<br> 可以</number></p>
+</li>
+<li><p>Can we pass ArrayList\<number\> to a method which accepts List\<number\> in Java? </number\></number\></p>
+<p>可以</p>
+</li>
+<li><p>Can we pass ArrayList\<integer\> to a method which accepts List\<number\>? </number\></integer\></p>
+<p>No</p>
+<p> How to fix that? (use wildcards e.g. List&lt;? extends Number&gt; to know more about bounded and unbounded wildcards and other generics questions see this post)<br> <a href="http://javarevisited.blogspot.sg/2012/06/10-interview-questions-on-java-generics.html" target="_blank" rel="external">http://javarevisited.blogspot.sg/2012/06/10-interview-questions-on-java-generics.html</a></p>
+</li>
+<li><p>volatile变量</p>
+<p> 从内存中去读，不cache；只有变量能用volatile修饰；对变量的读写是原子的；</p>
+</li>
+<li><p>difference between CountDownLatch and CyclicBarrier in Java? </p>
+<p>javadoc里面的描述是这样的:</p>
+<p>CountDownLatch: A synchronization aid that allows one or more threads to wait until a set of operations being performed in other threads completes.</p>
+<p>CyclicBarrier : A synchronization aid that allows a set of threads to all wait for each other to reach a common barrier point.</p>
+<p>CountDownLatch: 一个线程(或者多个)， 等待另外N个线程完成某个事情之后才能执行。<br> CyclicBarrier: N个线程相互等待，任何一个线程完成之前，所有的线程都必须等待。<br>这样应该就清楚一点了，对于CountDownLatch来说，重点是那个“一个线程”, 是它在等待， 而另外那N的线程在把“某个事情”做完之后可以继续等待，可以终止。而对于CyclicBarrier来说，重点是那N个线程，他们之间任何一个没有完成，所有的线程都必须等待。</p>
+<p>CountDownLatch 是计数器, 线程完成一个就记一个, 就像 报数一样, 只不过是递减的.而CyclicBarrier更像一个水闸, 线程执行就想水流, 在水闸处都会堵住, 等到水满(线程到齐)了, 才开始泄流.</p>
+<p>CountDownLatch是一次性的，而CyclicBarrier在调用reset之后还可以继续使用</p>
+</li>
+<li><p>BlockingQueue是线程安全的吗</p>
+<p> 是</p>
+</li>
+<li><p>Why wait and notify method should be called in loop? </p>
+<p>To prevent doing task, if condition is not true and thread is awake due to false alarms, checking conditions in loop ensures that processing is only done when business logic allows</p>
+</li>
+<li><p>What is difference between “abc”.equals(unknown string) and unknown.equals(“abc”)</p>
+<p>前者不会出现NullPointerException</p>
+</li>
+<li><p>What is marker or tag interface in Java? </p>
+<p>an interface, which presence means an instruction for JVM or compiler e.g. Serializable, from Java 5 onwards Annotation is better suited for this job, to learn more and answer in detail see this discussion.</p>
+<p><a href="http://javarevisited.blogspot.sg/2012/01/what-is-marker-interfaces-in-java-and.html" target="_blank" rel="external">http://javarevisited.blogspot.sg/2012/01/what-is-marker-interfaces-in-java-and.html</a></p>
+</li>
+<li><p>Difference between Serializable and Externalizable interface in Java? </p>
+<p>later provides more control over serialization process, and allow you to define custom binary format for your object, later is also suited for performance sensitive application</p>
+</li>
+<li><p>Can Enum types implement interface in Java?</p>
+<p> Yes</p>
+</li>
+<li><p>Can enum extend class in Java? </p>
+<p>不可以，因为java规定一个class只能继承一个class。enum默认继承自java.lang.Enum</p>
+</li>
+<li><p>How to prevent your class from being subclassed? </p>
+<p>Make it final or make constructor private</p>
+</li>
+<li><p>静态方法可以重写吗</p>
+<p> 不会出现编译错误，但是不会有重写的效果，因为静态方法是编译时绑定的</p>
+</li>
+<li><p>Which design pattern have you used recently? </p>
+<p>give any example except Singleton and MVC e.g. Decorator, Strategy or Factory pattern</p>
+</li>
+<li><p>StringBuffer和StringBuilder的区别</p>
+<p> StringBuffer is synchronized while StringBuilder is not which makes StringBuilder faster than StringBuffer.Use String if you require immutability, use Stringbuffer in java if you need mutable + thread-safety and use StringBuilder in Java if you require mutable + without thread-safety.</p>
+</li>
+</ol>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;在网上看到了这篇文章&lt;a href=&quot;http://javarevisited.blogspot.sg/2014/02/top-30-java-phone-interview-questions.html&quot;&gt;30个最常被问的java面试题&lt;/a&gt;发现这些问题和答案还挺有价值的，将其翻译总结一下。有些地方觉得英语更容易表示就直接引用了原文&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="java" scheme="http://decodezero.cn/tags/java/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Java内存虚拟机总结</title>
+    <link href="http://decodezero.cn/2016/07/21/Java-memory.html"/>
+    <id>http://decodezero.cn/2016/07/21/Java-memory.html</id>
+    <published>2016-07-21T00:08:08.000Z</published>
+    <updated>2018-10-17T05:58:02.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>读过几遍周志明老师的《深入理解Java虚拟机:JVM高级特性与最佳实践》获益匪浅，但是关于一些问题经常忘记又需要重新翻阅。现在将其中内存虚拟机相关章节的内从自己浓缩总结一下，以供参阅。</p>
+<a id="more"></a>
+<h3 id="1-Java内存区域介绍"><a href="#1-Java内存区域介绍" class="headerlink" title="1. Java内存区域介绍"></a>1. Java内存区域介绍</h3><ol>
+<li>程序计数器：每个线程独有，如果线程正在执行一个Java方法，这个计数器记录的是正在执行的虚拟机字节码地址，如在执行native方法，则计数器的值为空。唯一没有规定任何OutOfMemoryError的区域</li>
+<li>虚拟机栈：每个线程独有的，每个方法被执行的时候都会同时创建一个栈帧用于存储局部表量表，操作栈，动态链接，方法出口等。每一个方法被调用直至执行完成的过程，就对应着一个栈帧在虚拟机栈中从入栈到出栈的过程。局部变量表存放了编译器可知的基本数据类型如int等和对象引用和returnAddress类型（指向一条字节码指令的地址）。局部变量表所需要的内存空间在编译期间完成分配。存在两种异常。StackOverflowError：线程请求的栈深度大于虚拟机所允许的深度。</li>
+<li>本地方法栈：和虚拟机栈类似。虚拟机栈执行java方法，本地方法栈执行Native方法。有些虚拟机会如Sun HotSpot会把二者合二为一。</li>
+<li>Java堆：被所有线程共享，在虚拟机启动时创建，此内存区域的唯一目的就是存放对象实例。Java堆可以出于物理上不连续的内存空间。会抛出OutOfMemoryError异常</li>
+<li>方法区：被所有线程共享，存储已经被虚拟机加载的类信息、常量、静态变量、即时编译器编译后的代码。垃圾回收很少出现，主要针对常量池的回收和类型的卸载。运行时常量池是方法取得一部分，Class文件除了有版本、字段、方法等信息，还有常量表用于存放编译期生成的各种字面量和符号引用。类加载后这部分内容放到运行时常量池中。</li>
+</ol>
+<h3 id="2-对象访问两种方式"><a href="#2-对象访问两种方式" class="headerlink" title="2. 对象访问两种方式"></a>2. 对象访问两种方式</h3><ol>
+<li>句柄：Java堆中会划分出一个句柄池，reference中存储的是对象的句柄地址，句柄中包含真实地址。对象被移动时只需要改变句柄中实例数据指针，reference不需要修改。</li>
+<li>直接指针：速度更快。</li>
+</ol>
+<h3 id="3-垃圾回收"><a href="#3-垃圾回收" class="headerlink" title="3. 垃圾回收"></a>3. 垃圾回收</h3><h4 id="问题1：寻找一个对象是否存活的方法"><a href="#问题1：寻找一个对象是否存活的方法" class="headerlink" title="问题1：寻找一个对象是否存活的方法"></a>问题1：寻找一个对象是否存活的方法</h4><ol>
+<li>引用计数法：无法解决对象相互循环引用的问题。</li>
+<li>跟搜索算法：能否到GC Roots。如果能则存活，不能则应该回收</li>
+</ol>
+<h4 id="问题2：回收算法"><a href="#问题2：回收算法" class="headerlink" title="问题2：回收算法"></a>问题2：回收算法</h4><ol>
+<li>标记清除算法：首先标记处所有需要回收的对象，在标记完成后统一回收掉被标记的对象。存在效率低和空间内存碎片的问题。</li>
+<li>复制算法：现在商用虚拟机用来回收新生代。将内存分为较大Eden和两块较小Survivor，每次使用Eden和一块Survivor。回收时，Eden和Survivor中还存活着的一次性拷贝到另外一块Survivor，同时清理Eden和用过的Survivor。默认8:1:1。</li>
+<li>标记-整理算法：适用于老年代，让所有的存活的对象都向一段移动，然后直接清理掉边界以外的内存。<pre><code>现在整体采用的是分代收集算法。大对象直接进入老年代，长期存活的对象进入老年代
+</code></pre></li>
+</ol>
+]]></content>
+    
+    <summary type="html">
+    
+      &lt;p&gt;读过几遍周志明老师的《深入理解Java虚拟机:JVM高级特性与最佳实践》获益匪浅，但是关于一些问题经常忘记又需要重新翻阅。现在将其中内存虚拟机相关章节的内从自己浓缩总结一下，以供参阅。&lt;/p&gt;
+    
+    </summary>
+    
+      <category term="coder" scheme="http://decodezero.cn/categories/coder/"/>
+    
+    
+      <category term="java" scheme="http://decodezero.cn/tags/java/"/>
+    
+  </entry>
+  
+</feed>
